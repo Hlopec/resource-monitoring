@@ -76,7 +76,9 @@ fi
 
 cleanup() {
   echo "Stopping Docker Compose services..."
-  docker compose down >/dev/null 2>&1 || true
+  if ! docker compose down >/dev/null 2>&1; then
+    echo "Warning: failed to stop Docker Compose services during cleanup." >&2
+  fi
 }
 trap cleanup EXIT INT TERM
 
