@@ -22,6 +22,9 @@ The project is currently in Stage 01.3: base Docker Compose environment. This st
 - Start the stack: `docker compose up -d`
 - Check service status: `docker compose ps`
 
+## Directory overview
+The repository currently includes initial directories for application code, background workers, collectors, database assets, Redis support, DefectDojo integration, scripts, backups, configuration, data, logs, documentation, and infrastructure helpers.
+
 ## Service overview
 - `api`: FastAPI application on port `8000` with root and health endpoints
 - `postgres`: PostgreSQL 16 with a named persistent volume and health checks
