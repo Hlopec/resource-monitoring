@@ -7,7 +7,15 @@ This repository is being prepared as a local development workspace for a resourc
 ## Current development stage
 The project is currently in Stage 01.4: Docker developer workflow. This stage adds a repeatable Make-based workflow, environment setup helpers, and a smoke test for the local Docker Compose stack.
 
-Stage 02 — Database Foundation has started. This pull request adds architectural documentation only for the Resource Inventory domain model and ERD. ORM models, migrations, and business logic remain intentionally deferred.
+Stage 02 — Database Foundation has started. This pull request adds architectural documentation only for the Resource Inventory bounded context, including the ERD, lifecycle policy, indexing strategy, partitioning guidance, and ADRs. The database implementation itself is not yet performed; ORM models, migrations, SQL schema, API endpoints, repositories, collectors, and business logic remain intentionally deferred.
+
+### Architecture documentation
+- [docs/architecture/database/README.md](docs/architecture/database/README.md)
+- [docs/architecture/database/domain-model.md](docs/architecture/database/domain-model.md)
+- [docs/architecture/database/data-lifecycle.md](docs/architecture/database/data-lifecycle.md)
+- [docs/architecture/database/indexing-strategy.md](docs/architecture/database/indexing-strategy.md)
+- [docs/architecture/database/partitioning-strategy.md](docs/architecture/database/partitioning-strategy.md)
+- [docs/architecture/database/erd/resource-inventory.mmd](docs/architecture/database/erd/resource-inventory.mmd)
 
 ## Prerequisites
 - macOS with Apple Silicon

@@ -1,5 +1,5 @@
 erDiagram
-    TENANT {
+    tenant {
         UUID id PK
         string tenant_code
         string display_name
@@ -8,7 +8,7 @@ erDiagram
         boolean is_active
     }
 
-    ORGANIZATION {
+    organization {
         UUID id PK
         UUID tenant_id FK
         UUID parent_organization_id FK
@@ -19,7 +19,7 @@ erDiagram
         boolean is_active
     }
 
-    RESOURCE_TYPE {
+    resource_type {
         UUID id PK
         UUID tenant_id FK
         UUID parent_resource_type_id FK
@@ -29,20 +29,27 @@ erDiagram
         timestamp updated_at
     }
 
-    RESOURCE {
+    resource {
         UUID id PK
         UUID tenant_id FK
         UUID resource_type_id FK
-        UUID canonical_resource_id FK
-        string resource_name
-        string status
+        string canonical_name
+        string display_name
+        UUID lifecycle_status_id
+        UUID criticality_id
+        UUID exposure_level_id
+        int source_priority
+        decimal confidence_score
+        timestamp first_seen_at
+        timestamp last_seen_at
+        timestamp confirmed_at
+        timestamp archived_at
         timestamp created_at
         timestamp updated_at
-        timestamp valid_from
-        timestamp valid_to
+        int record_version
     }
 
-    IDENTIFIER_TYPE {
+    identifier_type {
         UUID id PK
         UUID tenant_id FK
         string identifier_code
@@ -50,65 +57,74 @@ erDiagram
         boolean is_authoritative
     }
 
-    RESOURCE_IDENTIFIER {
+    resource_identifier {
         UUID id PK
         UUID tenant_id FK
         UUID resource_id FK
         UUID identifier_type_id FK
+        string namespace
         string normalized_value
-        string raw_value
-        timestamp created_at
-        timestamp updated_at
+        string original_value
+        string value_hash
+        boolean is_primary
+        decimal confidence_score
         timestamp valid_from
         timestamp valid_to
+        timestamp created_at
     }
 
-    OWNERSHIP_ROLE {
+    ownership_role {
         UUID id PK
         UUID tenant_id FK
         string role_code
         string display_name
     }
 
-    RESOURCE_OWNERSHIP {
+    resource_ownership {
         UUID id PK
         UUID tenant_id FK
         UUID resource_id FK
         UUID organization_id FK
         UUID ownership_role_id FK
-        timestamp created_at
-        timestamp updated_at
+        boolean is_primary
         timestamp valid_from
         timestamp valid_to
+        UUID source_id
+        decimal confidence_score
+        timestamp created_at
     }
 
-    RELATIONSHIP_TYPE {
+    relationship_type {
         UUID id PK
         UUID tenant_id FK
         string relationship_code
         string display_name
     }
 
-    RESOURCE_RELATIONSHIP {
+    resource_relationship {
         UUID id PK
         UUID tenant_id FK
         UUID source_resource_id FK
-        UUID target_resource_id FK
         UUID relationship_type_id FK
-        timestamp created_at
-        timestamp updated_at
+        UUID target_resource_id FK
+        decimal confidence_score
+        timestamp first_seen_at
+        timestamp last_seen_at
         timestamp valid_from
         timestamp valid_to
+        UUID source_id
+        jsonb attributes
+        timestamp created_at
     }
 
-    CLASSIFICATION_TYPE {
+    classification_type {
         UUID id PK
         UUID tenant_id FK
         string classification_code
         string display_name
     }
 
-    CLASSIFICATION_VALUE {
+    classification_value {
         UUID id PK
         UUID tenant_id FK
         UUID classification_type_id FK
@@ -116,154 +132,152 @@ erDiagram
         string display_name
     }
 
-    RESOURCE_CLASSIFICATION {
+    resource_classification {
         UUID id PK
         UUID tenant_id FK
         UUID resource_id FK
         UUID classification_value_id FK
-        timestamp created_at
-        timestamp updated_at
         timestamp valid_from
         timestamp valid_to
+        timestamp created_at
     }
 
-    LABEL {
+    label {
         UUID id PK
         UUID tenant_id FK
         string label_code
         string display_name
     }
 
-    RESOURCE_LABEL {
+    resource_label {
         UUID id PK
         UUID tenant_id FK
         UUID resource_id FK
         UUID label_id FK
-        timestamp created_at
-        timestamp updated_at
         timestamp valid_from
         timestamp valid_to
+        timestamp created_at
     }
 
-    RESOURCE_STATE_HISTORY {
+    resource_state_history {
         UUID id PK
         UUID tenant_id FK
         UUID resource_id FK
-        string previous_state
-        string next_state
+        UUID lifecycle_status_id
+        UUID criticality_id
+        UUID exposure_level_id
+        decimal confidence_score
         timestamp changed_at
-        timestamp created_at
+        string changed_by_type
+        UUID changed_by_id
+        string reason_code
+        UUID source_event_id
     }
 
-    RESOURCE_MERGE {
+    resource_merge {
         UUID id PK
         UUID tenant_id FK
         UUID source_resource_id FK
         UUID target_resource_id FK
-        UUID reviewed_by FK
         string merge_reason
-        string review_status
+        string merge_strategy
+        UUID initiated_by
         timestamp merged_at
-        timestamp created_at
-        timestamp updated_at
+        jsonb metadata
     }
 
-    RESOURCE_OBSERVATION {
-        UUID id PK
-        UUID tenant_id FK
-        UUID resource_id FK
-        timestamp observed_at
-        timestamp created_at
+    domain_resource {
+        UUID resource_id PK, FK
+        string fqdn
+        string registrable_domain
+        string public_suffix
+        boolean is_idn
     }
 
-    TECHNOLOGY_DETECTION {
-        UUID id PK
-        UUID tenant_id FK
-        UUID resource_id FK
-        timestamp detected_at
-        timestamp created_at
+    ip_resource {
+        UUID resource_id PK, FK
+        inet address
+        int ip_version
+        boolean is_public
     }
 
-    FINDING_EVENT {
-        UUID id PK
-        UUID tenant_id FK
-        UUID resource_id FK
-        timestamp occurred_at
-        timestamp created_at
+    url_resource {
+        UUID resource_id PK, FK
+        string scheme
+        string host
+        int port
+        string path
+        string query_hash
+        string normalized_url
     }
 
-    AUDIT_EVENT {
-        UUID id PK
-        UUID tenant_id FK
-        UUID resource_id FK
-        timestamp occurred_at
-        timestamp created_at
+    network_service_resource {
+        UUID resource_id PK, FK
+        UUID ip_resource_id FK
+        string transport_protocol
+        int port
+        string application_protocol
     }
 
-    OUTBOX_EVENT {
-        UUID id PK
-        UUID tenant_id FK
-        UUID resource_id FK
-        timestamp occurred_at
-        timestamp created_at
+    repository_resource {
+        UUID resource_id PK, FK
+        string provider
+        string owner_path
+        string repository_name
+        string provider_repository_id
+        string default_branch
     }
 
-    VULNERABILITY_RECORD {
-        UUID id PK
-        UUID tenant_id FK
-        UUID resource_id FK
-        timestamp observed_at
-        timestamp created_at
+    container_image_resource {
+        UUID resource_id PK, FK
+        string registry
+        string repository
+        string digest
     }
 
-    TENANT ||--o{ ORGANIZATION : contains
-    TENANT ||--o{ RESOURCE_TYPE : defines
-    TENANT ||--o{ RESOURCE : owns
-    TENANT ||--o{ IDENTIFIER_TYPE : defines
-    TENANT ||--o{ RESOURCE_IDENTIFIER : owns
-    TENANT ||--o{ OWNERSHIP_ROLE : defines
-    TENANT ||--o{ RESOURCE_OWNERSHIP : owns
-    TENANT ||--o{ RELATIONSHIP_TYPE : defines
-    TENANT ||--o{ RESOURCE_RELATIONSHIP : owns
-    TENANT ||--o{ CLASSIFICATION_TYPE : defines
-    TENANT ||--o{ CLASSIFICATION_VALUE : defines
-    TENANT ||--o{ RESOURCE_CLASSIFICATION : owns
-    TENANT ||--o{ LABEL : defines
-    TENANT ||--o{ RESOURCE_LABEL : owns
-    TENANT ||--o{ RESOURCE_STATE_HISTORY : owns
-    TENANT ||--o{ RESOURCE_MERGE : owns
-    TENANT ||--o{ RESOURCE_OBSERVATION : owns
-    TENANT ||--o{ TECHNOLOGY_DETECTION : owns
-    TENANT ||--o{ FINDING_EVENT : owns
-    TENANT ||--o{ AUDIT_EVENT : owns
-    TENANT ||--o{ OUTBOX_EVENT : owns
-    TENANT ||--o{ VULNERABILITY_RECORD : owns
+    tenant ||--o{ organization : contains
+    tenant ||--o{ resource_type : defines
+    tenant ||--o{ resource : owns
+    tenant ||--o{ identifier_type : defines
+    tenant ||--o{ resource_identifier : owns
+    tenant ||--o{ ownership_role : defines
+    tenant ||--o{ resource_ownership : owns
+    tenant ||--o{ relationship_type : defines
+    tenant ||--o{ resource_relationship : owns
+    tenant ||--o{ classification_type : defines
+    tenant ||--o{ classification_value : defines
+    tenant ||--o{ resource_classification : owns
+    tenant ||--o{ label : defines
+    tenant ||--o{ resource_label : owns
+    tenant ||--o{ resource_state_history : owns
+    tenant ||--o{ resource_merge : owns
 
-    ORGANIZATION ||--o{ RESOURCE_OWNERSHIP : is_owning_boundary
-    ORGANIZATION ||--o{ ORGANIZATION : parent_child
+    organization ||--o{ resource_ownership : is_owned_by
+    organization ||--o{ organization : parent_child
 
-    RESOURCE_TYPE ||--o{ RESOURCE_TYPE : parent_child
-    RESOURCE_TYPE ||--o{ RESOURCE : classified_as
+    resource_type ||--o{ resource_type : parent_child
+    resource_type ||--o{ resource : classifies
 
-    RESOURCE ||--o{ RESOURCE_IDENTIFIER : has
-    RESOURCE ||--o{ RESOURCE_OWNERSHIP : has
-    RESOURCE ||--o{ RESOURCE_RELATIONSHIP : source
-    RESOURCE ||--o{ RESOURCE_RELATIONSHIP : target
-    RESOURCE ||--o{ RESOURCE_CLASSIFICATION : has
-    RESOURCE ||--o{ RESOURCE_LABEL : has
-    RESOURCE ||--o{ RESOURCE_STATE_HISTORY : transitions
-    RESOURCE ||--o{ RESOURCE_MERGE : merged_from
-    RESOURCE ||--o{ RESOURCE_MERGE : merged_to
-    RESOURCE ||--o{ RESOURCE_OBSERVATION : observed_for
-    RESOURCE ||--o{ TECHNOLOGY_DETECTION : detected_for
-    RESOURCE ||--o{ FINDING_EVENT : associated_with
-    RESOURCE ||--o{ AUDIT_EVENT : associated_with
-    RESOURCE ||--o{ OUTBOX_EVENT : published_for
-    RESOURCE ||--o{ VULNERABILITY_RECORD : has
+    resource ||--o{ resource_identifier : has
+    resource ||--o{ resource_ownership : has
+    resource ||--o{ resource_relationship : source
+    resource ||--o{ resource_relationship : target
+    resource ||--o{ resource_classification : has
+    resource ||--o{ resource_label : has
+    resource ||--o{ resource_state_history : transitions
+    resource ||--o{ resource_merge : merged_from
+    resource ||--o{ resource_merge : merged_to
+    resource ||--o{ domain_resource : extends
+    resource ||--o{ ip_resource : extends
+    resource ||--o{ url_resource : extends
+    resource ||--o{ network_service_resource : extends
+    resource ||--o{ repository_resource : extends
+    resource ||--o{ container_image_resource : extends
 
-    IDENTIFIER_TYPE ||--o{ RESOURCE_IDENTIFIER : defines
-    OWNERSHIP_ROLE ||--o{ RESOURCE_OWNERSHIP : defines
-    RELATIONSHIP_TYPE ||--o{ RESOURCE_RELATIONSHIP : defines
-    CLASSIFICATION_TYPE ||--o{ CLASSIFICATION_VALUE : contains
-    CLASSIFICATION_VALUE ||--o{ RESOURCE_CLASSIFICATION : assigned_as
-    LABEL ||--o{ RESOURCE_LABEL : assigned_as
+    identifier_type ||--o{ resource_identifier : defines
+    ownership_role ||--o{ resource_ownership : defines
+    relationship_type ||--o{ resource_relationship : defines
+    classification_type ||--o{ classification_value : contains
+    classification_value ||--o{ resource_classification : assigned_as
+    label ||--o{ resource_label : assigned_as
+    ip_resource ||--o{ network_service_resource : serves

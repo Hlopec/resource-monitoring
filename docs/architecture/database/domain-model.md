@@ -2,132 +2,185 @@
 
 ## Purpose
 
-The Resource Inventory bounded context is responsible for representing the canonical inventory of digital resources that an organization manages, the identities that reference them, the relationships between them, and the lifecycle history of those facts. It is intentionally modeled as a shared, tenant-aware foundation that can support future bounded contexts such as observations, technology detections, finding events, audit events, and outbox events without forcing those domains into the core model.
+The Resource Inventory bounded context represents the canonical inventory of digital resources that an organization manages. The model is intentionally centered on durable identity, tenant isolation, temporal validity, and auditable merge behavior so that future downstream domains can depend on it without embedding their own lifecycle semantics in the core schema.
 
-## Boundaries
+## Scope and boundaries
 
-The Resource Inventory model owns:
+The core model owns:
 
-- a tenant and organization hierarchy;
+- tenant and organization hierarchy;
 - resource types and the abstract resource entity;
-- resource identities and identifiers;
+- resource identifiers and deterministic identity evidence;
 - ownership and relationship facts;
-- classification, labels, and lifecycle state history;
-- merge and deduplication audit evidence.
+- classifications, labels, state history, and merge evidence.
 
-It does not own the semantics of downstream observations or remediation workflows. Those later domains may depend on Resource Inventory as an external reference domain.
+The model does not treat downstream observations, technology detections, finding events, audit events, outbox events, or vulnerability records as part of the core Resource Inventory ERD. Those domains may be modeled later as separate bounded contexts that reference Resource Inventory as a shared dependency.
 
 ## Core entities
 
 ### Tenant
 
-A tenant is the top-level isolation boundary for all data in the domain. Every tenant-owned entity carries a tenant identifier and is governed by tenant-local constraints and, later, tenant-based sharding.
+A tenant is the top-level isolation boundary for all data in the domain. Every tenant-owned entity carries a tenant identifier and remains scoped to tenant-local governance and future tenant-based sharding.
 
 ### Organization
 
-Organizations are hierarchical containers that represent the reporting and administrative boundaries within a tenant. They are modeled as a parent-child hierarchy to support ownership and policy propagation while still allowing direct resource ownership at the resource level.
+Organizations define the administrative and reporting boundary within a tenant. They form a hierarchical structure that can be used for ownership propagation and policy scope.
 
 ### Resource type
 
-A resource type hierarchy supports polymorphic classification of resources while preserving a stable taxonomy for the domain. Resource types can be organized as a tree so that downstream logic can reason about inheritance and category grouping.
+Resource types define a stable taxonomy for the domain and support future inheritance-based grouping without overloading the resource entity with every possible subtype distinction.
 
 ### Resource
 
-Resource is the central entity. It represents a logical resource record that may be referenced by many identifiers and related to many other resources. It is the primary place for the current logical state of the resource, while historical facts remain in versioned or event-based structures.
+Resource is the canonical logical record. It stores the current state of the resource, including lifecycle status, criticality, exposure level, identity confidence, and temporal observation markers. The entity includes a `record_version` field for optimistic concurrency control.
+
+The resource table does not carry `valid_from` and `valid_to` because those are represented by versioned relationships, ownership assignments, identifiers, and state-history rows rather than by the core resource row itself.
 
 ### Resource identifier
 
-A resource identifier captures a specific identifier value associated with a given identifier type. The model supports deterministic identity matching using normalized values and provides a place for audit evidence about how identifiers were observed and interpreted.
+Resource identifier stores a specific identifier value for a resource, using an identifier type and a normalized representation. Each assignment remains temporally versioned so that the identity evidence can be audited and superseded when required.
 
 ### Ownership role and resource ownership
 
-Ownership roles define the purpose of an ownership relationship, while resource ownership records the association between a resource and an organization or actor boundary. Ownership is treated as a first-class fact that can change over time and must be reproducible through temporal validity.
+Ownership roles describe the purpose of an ownership relationship. Resource ownership stores the association between a resource and an organization with a validity window, a source, and a confidence score. Ownership is not modeled as a mutable current-state record in the same way as a simple flag; it is a temporally versioned assignment fact.
 
 ### Relationship type and resource relationship
 
-Resource relationships model directed associations between resources, such as parent-child, dependency, or containment relationships. Temporal validity is essential because relationships change over time and can be superseded.
+Resource relationships capture directed associations such as dependency, containment, or parent-child links. Each relationship is temporally versioned and may be superseded over time.
 
 ### Classification type, classification value, and resource classification
 
-Classification values provide a flexible but controlled vocabulary for tagging resources. Resource classification records the assignment of a classification value to a resource within a specific domain, enabling future extension without creating a wide-open free-form tag model.
+Classification values provide a controlled vocabulary for tagging resources. Resource classification records the assignment of a classification value to a resource with a temporal validity window so the model can preserve the history of the assignment.
 
 ### Label and resource label
 
-Labels provide lightweight case-specific annotation without changing the canonical resource definition. Resource labels attach a label to a resource, while the label vocabulary remains tenant-scoped and governed by policies.
+Labels provide lightweight annotations without changing canonical identity. Resource label attachments remain temporal facts so that labels can be removed or superseded without losing audit context.
 
 ### Resource state history
 
-Resource state history records the timeline of lifecycle changes for a resource, including state changes, effective timestamps, and audit context. It is designed to preserve historical state without mutating the logical resource record in place.
+Resource state history is immutable append-only evidence of lifecycle transitions. It stores the state, confidence, reason, and source event that caused the transition.
 
 ### Resource merge
 
-Resource merge records the act of consolidating two or more resources into a single canonical resource. This entity stores merge evidence, policy decisions, reviewer identity, and rollback or review status so that merge operations remain auditable and reversible where required.
+Resource merge stores the evidence and policy outcome of the consolidation of two resources into one canonical resource. It is designed for auditability, review, rollback, and policy enforcement.
 
-## Six conceptual extension entities
+## Type-specific extension entities
 
-The issue requires the ERD to include six conceptual extension entities that represent future domains that depend on Resource Inventory but remain outside the core domain. These are documented conceptually as external dependencies rather than implemented entities:
+The model also supports type-specific extension entities when the domain needs:
 
-1. Resource observation
-2. Technology detection
-3. Finding event
-4. Audit event
-5. Outbox event
-6. Vulnerability record
+- PostgreSQL-specific types such as `INET`;
+- strict constraints;
+- frequent subtype-specific queries;
+- referential integrity between a resource and its subtype representation;
+- performance that JSONB cannot provide efficiently.
 
-They are not part of the core data ownership model; rather, they reference resources and may later form their own bounded contexts.
+These entities are optional and only added when the subtype requires stronger structural guarantees than the generic core model can provide.
+
+### Domain resource
+
+- `resource_id`
+- `fqdn`
+- `registrable_domain`
+- `public_suffix`
+- `is_idn`
+
+### IP resource
+
+- `resource_id`
+- `address INET`
+- `ip_version`
+- `is_public`
+
+### URL resource
+
+- `resource_id`
+- `scheme`
+- `host`
+- `port`
+- `path`
+- `query_hash`
+- `normalized_url`
+
+### Network service resource
+
+- `resource_id`
+- `ip_resource_id`
+- `transport_protocol`
+- `port`
+- `application_protocol`
+
+### Repository resource
+
+- `resource_id`
+- `provider`
+- `owner_path`
+- `repository_name`
+- `provider_repository_id`
+- `default_branch`
+
+### Container image resource
+
+- `resource_id`
+- `registry`
+- `repository`
+- `digest`
+
+## Deduplication model
+
+Deduplication is intentionally layered and governed by policy.
+
+### Deterministic identity
+
+Deterministic identity uses stable values such as FQDNs, IP addresses, repository provider IDs, container digests, cloud ARNs, Kubernetes UIDs, or package URLs. These values can be used for direct, reproducible identity matching.
+
+### Correlated identity
+
+Correlated identity uses evidence such as hostname, TLS certificate, HTTP fingerprint, cloud metadata, or repository origin to build a stronger case that two records refer to the same logical resource.
+
+### Probabilistic matching
+
+Probabilistic matching uses rules or AI-based confidence scoring. It is never allowed to merge records automatically without:
+
+- a configured threshold;
+- a tenant policy;
+- audit evidence;
+- a review mechanism;
+- a rollback strategy.
+
+## Constraints and governance
+
+The design applies the following constraints:
+
+- `tenant_id` is mandatory for every tenant-owned row.
+- `resource_relationship.source_resource_id` must not equal `resource_relationship.target_resource_id`.
+- `confidence_score` must satisfy $0.0000 \leq confidence_score \leq 1.0000$.
+- `valid_to` must be null or greater than `valid_from`.
+- Relationship and assignment rows must belong to the same tenant as both the source and target resources.
+- Primary keys, foreign keys, unique constraints, partial unique constraints, and check constraints are part of the logical design even if the initial implementation is still documentation-first.
 
 ## Design principles
 
 ### Hybrid resource model
 
-The domain uses a hybrid resource model:
+The domain uses a hybrid model with:
 
-- a canonical resource record for the durable logical identity;
-- a set of identifiers that allow deterministic matching;
-- historical and relationship facts that preserve evolving context;
-- flexible classification and labeling that can be extended without breaking the core model.
-
-This hybrid model avoids overloading the core resource entity with all possible context and keeps the model scalable for later decomposition.
+- a canonical resource row for durable logical identity;
+- identifier rows for deterministic matching;
+- relationship and ownership rows for graph semantics and history;
+- classification and label rows for controlled extension.
 
 ### Tenant from day one
 
-Every tenant-owned entity must include a tenant identifier. This is a mandatory design constraint, not an afterthought. It enables future tenant-based sharding, multi-tenant isolation, and consistent authorization policies.
+Tenant isolation is a mandatory constraint and not an afterthought. It supports multi-tenancy, tenant-local uniqueness, and future sharding.
 
 ### UUIDv7 for major entities
 
-UUIDv7 is the recommended major-entity key strategy for entities that need a globally sortable identifier without exposing an increasing integer sequence. It is suited to distributed writes and future partitioning strategies.
+UUIDv7 is the preferred identifier strategy for major entities because it is globally sortable, distributed-write friendly, and well suited to future partitioning.
 
 ### Temporal validity and system time
 
-The model distinguishes between:
+The model separates logical validity from record metadata:
 
-- valid_from / valid_to for logical validity of facts;
-- created_at for the time the record was created;
-- updated_at for the last mutation to the record;
-- changed_at for state transitions or event application times.
-
-This distinction prevents ambiguity when historical facts are reinterpreted or when the system needs to preserve the time a change was observed versus the time it became valid.
-
-## Lifecycle policies
-
-The model distinguishes between mutable, immutable, versioned, historical, derived, and ephemeral facts:
-
-- Mutable facts: current ownership, current classification, current labels.
-- Immutable facts: identifier types, relationship types, ownership roles, classification types.
-- Versioned facts: resource state history and relationship history.
-- Historical facts: merge audit records and prior ownership facts.
-- Derived facts: aggregated classification or ownership summaries.
-- Ephemeral facts: transient review state or temporary deduplication signals.
-
-## Constraints and rules
-
-- Every tenant-owned entity must carry tenant_id.
-- Every major entity should have a stable UUIDv7 primary key.
-- Resource identifiers must be normalized before use in deterministic matching.
-- Resource merges must never be silent; they require evidence and review policy.
-- Hard deletion is not the default for resources. A resource should be logically retired or superseded rather than deleted outright.
-- Controlled JSONB usage is reserved for flexible metadata that is not the primary query surface and should be treated as a bounded extension, not a substitute for structured domain fields.
-
-## Notes on future decomposition
-
-As the platform grows, this model can be split into separate bounded contexts. The core Resource Inventory model remains the canonical source of resource identity and relationships, while later domains can own their own specialized event and observation data.
+- `valid_from` / `valid_to` express logical validity;
+- `created_at` / `updated_at` express record lifecycle;
+- `changed_at` expresses state-transition application time.
