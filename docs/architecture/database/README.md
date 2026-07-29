@@ -17,7 +17,7 @@ The documentation is intentionally architecture-first. It does not introduce SQL
 
 ## Document map
 
-- [domain-model.md](domain-model.md) — responsibilities, entities, relationships, lifecycle policies, and constraints.
+- [domain-model.md](domain-model.md) — responsibilities, entities, relationships, lifecycle policies, catalog scope policy, tenant-consistency enforcement, and constraints.
 - [data-lifecycle.md](data-lifecycle.md) — mutable, immutable, versioned, historical, derived, and ephemeral policies.
 - [indexing-strategy.md](indexing-strategy.md) — logical indexes and their purpose.
 - [partitioning-strategy.md](partitioning-strategy.md) — evolution from single primary to sharded deployment.

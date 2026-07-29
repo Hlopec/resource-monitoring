@@ -24,11 +24,11 @@ A tenant is the top-level isolation boundary for all data in the domain. Every t
 
 ### Organization
 
-Organizations define the administrative and reporting boundary within a tenant. They form a hierarchical structure that can be used for ownership propagation and policy scope.
+Organizations define the administrative and reporting boundary within a tenant. They form a hierarchical structure that can be used for ownership propagation and policy scope. The logical model includes `organization_type_id`, `canonical_name`, `external_key`, `status`, `created_at`, `updated_at`, and `archived_at`. If `organization_type_id` or lifecycle-related reference values are introduced later, they are treated as managed reference catalogs and are not part of the core resource-inventory implementation in this PR.
 
 ### Resource type
 
-Resource types define a stable taxonomy for the domain and support future inheritance-based grouping without overloading the resource entity with every possible subtype distinction.
+Resource types define a stable taxonomy for the domain and support future inheritance-based grouping without overloading the resource entity with every possible subtype distinction. The logical fields are `id`, `code`, `display_name`, `parent_type_id`, `category`, `schema_version`, `is_system`, `is_active`, `created_at`, and `updated_at`.
 
 ### Resource
 
@@ -147,6 +147,19 @@ Probabilistic matching uses rules or AI-based confidence scoring. It is never al
 - a review mechanism;
 - a rollback strategy.
 
+## Tenant consistency enforcement
+
+The recommended PostgreSQL enforcement strategy is to use tenant-aware composite keys and tenant-aware composite foreign keys for all tenant-owned child rows. This makes tenant ownership part of the database contract rather than a purely application-level convention.
+
+- Tenant-owned parent entities should have a tenant-scoped candidate key such as `UNIQUE (tenant_id, id)`.
+- Tenant-owned child entities should use composite foreign keys such as `FOREIGN KEY (tenant_id, resource_id) REFERENCES resource (tenant_id, id)`.
+- `resource_relationship` should use two tenant-aware composite foreign keys:
+  - `FOREIGN KEY (tenant_id, source_resource_id) REFERENCES resource (tenant_id, id)`
+  - `FOREIGN KEY (tenant_id, target_resource_id) REFERENCES resource (tenant_id, id)`
+- The same pattern should be applied to identifiers, ownership rows, classifications, labels, and merge records.
+
+Application-level validation may duplicate these checks, but it should not replace database enforcement because the database is the last line of defense for consistency.
+
 ## Constraints and governance
 
 The design applies the following constraints:
@@ -157,6 +170,17 @@ The design applies the following constraints:
 - `valid_to` must be null or greater than `valid_from`.
 - Relationship and assignment rows must belong to the same tenant as both the source and target resources.
 - Primary keys, foreign keys, unique constraints, partial unique constraints, and check constraints are part of the logical design even if the initial implementation is still documentation-first.
+
+## Catalog scope policy
+
+The documentation adopts a single consistent model for reference catalogs:
+
+- System catalogs such as `resource_type`, `identifier_type`, `relationship_type`, `ownership_role`, `classification_type`, and `classification_value` are global managed reference data.
+- Tenant-owned assignment and operational tables always contain `tenant_id`.
+- Tenant-specific overrides or extensions may be introduced later as separate entities if the product requires them.
+- `label` remains tenant-scoped because labels are operational annotations and not global reference data.
+
+This approach avoids ambiguous duplication of reference catalogs across tenants while still preserving tenant-scoped operational tables.
 
 ## Design principles
 

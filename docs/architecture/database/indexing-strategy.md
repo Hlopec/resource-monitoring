@@ -29,7 +29,12 @@ These indexes support inventory browsing, active-resource prioritization, and li
 
 The partial unique index ensures there is only one active identifier assignment for a given tenant, identifier type, namespace, and normalized value. The second index supports reverse lookup from a resource to its active identifiers.
 
-`normalized_value` should be indexed directly when the workload needs case-insensitive search, prefix search, or human-readable lookup. `value_hash` should be used for exact equality and uniqueness checks because it is compact and normalized. For deterministic identity matching, the hash is typically the primary comparison key while `normalized_value` remains the display and audit value.
+`normalized_value` should be indexed directly when the workload needs case-insensitive search, prefix search, or human-readable lookup. `value_hash` should be used for exact equality and uniqueness checks because it is compact and normalized, but it is not a substitute for full-value comparison. The matching workflow is:
+
+1. perform a lookup by `value_hash`;
+2. after a hash match, compare the full `normalized_value` value;
+3. treat a hash collision as a non-match until the full-value comparison confirms identity;
+4. define the concrete hash algorithm during the implementation stage.
 
 ### Resource relationship
 

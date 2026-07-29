@@ -12,19 +12,25 @@ erDiagram
         UUID id PK
         UUID tenant_id FK
         UUID parent_organization_id FK
-        string organization_code
+        UUID organization_type_id FK
+        string canonical_name
         string display_name
+        string external_key
+        string status
         timestamp created_at
         timestamp updated_at
-        boolean is_active
+        timestamp archived_at
     }
 
     resource_type {
         UUID id PK
-        UUID tenant_id FK
-        UUID parent_resource_type_id FK
-        string type_code
+        string code
         string display_name
+        UUID parent_type_id FK
+        string category
+        int schema_version
+        boolean is_system
+        boolean is_active
         timestamp created_at
         timestamp updated_at
     }
@@ -51,10 +57,13 @@ erDiagram
 
     identifier_type {
         UUID id PK
-        UUID tenant_id FK
-        string identifier_code
+        string code
         string display_name
-        boolean is_authoritative
+        string normalization_strategy
+        string uniqueness_scope
+        boolean is_case_sensitive
+        boolean is_system
+        boolean is_active
     }
 
     resource_identifier {
@@ -75,9 +84,10 @@ erDiagram
 
     ownership_role {
         UUID id PK
-        UUID tenant_id FK
-        string role_code
+        string code
         string display_name
+        boolean is_system
+        boolean is_active
     }
 
     resource_ownership {
@@ -96,9 +106,15 @@ erDiagram
 
     relationship_type {
         UUID id PK
-        UUID tenant_id FK
-        string relationship_code
+        string code
         string display_name
+        string inverse_code
+        string source_type_constraint
+        string target_type_constraint
+        boolean is_directional
+        boolean is_transitive
+        boolean is_system
+        boolean is_active
     }
 
     resource_relationship {
@@ -119,17 +135,19 @@ erDiagram
 
     classification_type {
         UUID id PK
-        UUID tenant_id FK
-        string classification_code
+        string code
         string display_name
+        boolean is_system
+        boolean is_active
     }
 
     classification_value {
         UUID id PK
-        UUID tenant_id FK
         UUID classification_type_id FK
-        string value_code
+        string code
         string display_name
+        boolean is_system
+        boolean is_active
     }
 
     resource_classification {
@@ -145,8 +163,10 @@ erDiagram
     label {
         UUID id PK
         UUID tenant_id FK
-        string label_code
+        string code
         string display_name
+        boolean is_system
+        boolean is_active
     }
 
     resource_label {
@@ -236,9 +256,7 @@ erDiagram
     }
 
     tenant ||--o{ organization : contains
-    tenant ||--o{ resource_type : defines
     tenant ||--o{ resource : owns
-    tenant ||--o{ identifier_type : defines
     tenant ||--o{ resource_identifier : owns
     tenant ||--o{ ownership_role : defines
     tenant ||--o{ resource_ownership : owns
@@ -267,12 +285,12 @@ erDiagram
     resource ||--o{ resource_state_history : transitions
     resource ||--o{ resource_merge : merged_from
     resource ||--o{ resource_merge : merged_to
-    resource ||--o{ domain_resource : extends
-    resource ||--o{ ip_resource : extends
-    resource ||--o{ url_resource : extends
-    resource ||--o{ network_service_resource : extends
-    resource ||--o{ repository_resource : extends
-    resource ||--o{ container_image_resource : extends
+    resource ||--o| domain_resource : extends
+    resource ||--o| ip_resource : extends
+    resource ||--o| url_resource : extends
+    resource ||--o| network_service_resource : extends
+    resource ||--o| repository_resource : extends
+    resource ||--o| container_image_resource : extends
 
     identifier_type ||--o{ resource_identifier : defines
     ownership_role ||--o{ resource_ownership : defines
