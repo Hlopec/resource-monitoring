@@ -1,0 +1,269 @@
+erDiagram
+    TENANT {
+        UUID id PK
+        string tenant_code
+        string display_name
+        timestamp created_at
+        timestamp updated_at
+        boolean is_active
+    }
+
+    ORGANIZATION {
+        UUID id PK
+        UUID tenant_id FK
+        UUID parent_organization_id FK
+        string organization_code
+        string display_name
+        timestamp created_at
+        timestamp updated_at
+        boolean is_active
+    }
+
+    RESOURCE_TYPE {
+        UUID id PK
+        UUID tenant_id FK
+        UUID parent_resource_type_id FK
+        string type_code
+        string display_name
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    RESOURCE {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_type_id FK
+        UUID canonical_resource_id FK
+        string resource_name
+        string status
+        timestamp created_at
+        timestamp updated_at
+        timestamp valid_from
+        timestamp valid_to
+    }
+
+    IDENTIFIER_TYPE {
+        UUID id PK
+        UUID tenant_id FK
+        string identifier_code
+        string display_name
+        boolean is_authoritative
+    }
+
+    RESOURCE_IDENTIFIER {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        UUID identifier_type_id FK
+        string normalized_value
+        string raw_value
+        timestamp created_at
+        timestamp updated_at
+        timestamp valid_from
+        timestamp valid_to
+    }
+
+    OWNERSHIP_ROLE {
+        UUID id PK
+        UUID tenant_id FK
+        string role_code
+        string display_name
+    }
+
+    RESOURCE_OWNERSHIP {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        UUID organization_id FK
+        UUID ownership_role_id FK
+        timestamp created_at
+        timestamp updated_at
+        timestamp valid_from
+        timestamp valid_to
+    }
+
+    RELATIONSHIP_TYPE {
+        UUID id PK
+        UUID tenant_id FK
+        string relationship_code
+        string display_name
+    }
+
+    RESOURCE_RELATIONSHIP {
+        UUID id PK
+        UUID tenant_id FK
+        UUID source_resource_id FK
+        UUID target_resource_id FK
+        UUID relationship_type_id FK
+        timestamp created_at
+        timestamp updated_at
+        timestamp valid_from
+        timestamp valid_to
+    }
+
+    CLASSIFICATION_TYPE {
+        UUID id PK
+        UUID tenant_id FK
+        string classification_code
+        string display_name
+    }
+
+    CLASSIFICATION_VALUE {
+        UUID id PK
+        UUID tenant_id FK
+        UUID classification_type_id FK
+        string value_code
+        string display_name
+    }
+
+    RESOURCE_CLASSIFICATION {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        UUID classification_value_id FK
+        timestamp created_at
+        timestamp updated_at
+        timestamp valid_from
+        timestamp valid_to
+    }
+
+    LABEL {
+        UUID id PK
+        UUID tenant_id FK
+        string label_code
+        string display_name
+    }
+
+    RESOURCE_LABEL {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        UUID label_id FK
+        timestamp created_at
+        timestamp updated_at
+        timestamp valid_from
+        timestamp valid_to
+    }
+
+    RESOURCE_STATE_HISTORY {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        string previous_state
+        string next_state
+        timestamp changed_at
+        timestamp created_at
+    }
+
+    RESOURCE_MERGE {
+        UUID id PK
+        UUID tenant_id FK
+        UUID source_resource_id FK
+        UUID target_resource_id FK
+        UUID reviewed_by FK
+        string merge_reason
+        string review_status
+        timestamp merged_at
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    RESOURCE_OBSERVATION {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        timestamp observed_at
+        timestamp created_at
+    }
+
+    TECHNOLOGY_DETECTION {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        timestamp detected_at
+        timestamp created_at
+    }
+
+    FINDING_EVENT {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        timestamp occurred_at
+        timestamp created_at
+    }
+
+    AUDIT_EVENT {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        timestamp occurred_at
+        timestamp created_at
+    }
+
+    OUTBOX_EVENT {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        timestamp occurred_at
+        timestamp created_at
+    }
+
+    VULNERABILITY_RECORD {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        timestamp observed_at
+        timestamp created_at
+    }
+
+    TENANT ||--o{ ORGANIZATION : contains
+    TENANT ||--o{ RESOURCE_TYPE : defines
+    TENANT ||--o{ RESOURCE : owns
+    TENANT ||--o{ IDENTIFIER_TYPE : defines
+    TENANT ||--o{ RESOURCE_IDENTIFIER : owns
+    TENANT ||--o{ OWNERSHIP_ROLE : defines
+    TENANT ||--o{ RESOURCE_OWNERSHIP : owns
+    TENANT ||--o{ RELATIONSHIP_TYPE : defines
+    TENANT ||--o{ RESOURCE_RELATIONSHIP : owns
+    TENANT ||--o{ CLASSIFICATION_TYPE : defines
+    TENANT ||--o{ CLASSIFICATION_VALUE : defines
+    TENANT ||--o{ RESOURCE_CLASSIFICATION : owns
+    TENANT ||--o{ LABEL : defines
+    TENANT ||--o{ RESOURCE_LABEL : owns
+    TENANT ||--o{ RESOURCE_STATE_HISTORY : owns
+    TENANT ||--o{ RESOURCE_MERGE : owns
+    TENANT ||--o{ RESOURCE_OBSERVATION : owns
+    TENANT ||--o{ TECHNOLOGY_DETECTION : owns
+    TENANT ||--o{ FINDING_EVENT : owns
+    TENANT ||--o{ AUDIT_EVENT : owns
+    TENANT ||--o{ OUTBOX_EVENT : owns
+    TENANT ||--o{ VULNERABILITY_RECORD : owns
+
+    ORGANIZATION ||--o{ RESOURCE_OWNERSHIP : is_owning_boundary
+    ORGANIZATION ||--o{ ORGANIZATION : parent_child
+
+    RESOURCE_TYPE ||--o{ RESOURCE_TYPE : parent_child
+    RESOURCE_TYPE ||--o{ RESOURCE : classified_as
+
+    RESOURCE ||--o{ RESOURCE_IDENTIFIER : has
+    RESOURCE ||--o{ RESOURCE_OWNERSHIP : has
+    RESOURCE ||--o{ RESOURCE_RELATIONSHIP : source
+    RESOURCE ||--o{ RESOURCE_RELATIONSHIP : target
+    RESOURCE ||--o{ RESOURCE_CLASSIFICATION : has
+    RESOURCE ||--o{ RESOURCE_LABEL : has
+    RESOURCE ||--o{ RESOURCE_STATE_HISTORY : transitions
+    RESOURCE ||--o{ RESOURCE_MERGE : merged_from
+    RESOURCE ||--o{ RESOURCE_MERGE : merged_to
+    RESOURCE ||--o{ RESOURCE_OBSERVATION : observed_for
+    RESOURCE ||--o{ TECHNOLOGY_DETECTION : detected_for
+    RESOURCE ||--o{ FINDING_EVENT : associated_with
+    RESOURCE ||--o{ AUDIT_EVENT : associated_with
+    RESOURCE ||--o{ OUTBOX_EVENT : published_for
+    RESOURCE ||--o{ VULNERABILITY_RECORD : has
+
+    IDENTIFIER_TYPE ||--o{ RESOURCE_IDENTIFIER : defines
+    OWNERSHIP_ROLE ||--o{ RESOURCE_OWNERSHIP : defines
+    RELATIONSHIP_TYPE ||--o{ RESOURCE_RELATIONSHIP : defines
+    CLASSIFICATION_TYPE ||--o{ CLASSIFICATION_VALUE : contains
+    CLASSIFICATION_VALUE ||--o{ RESOURCE_CLASSIFICATION : assigned_as
+    LABEL ||--o{ RESOURCE_LABEL : assigned_as

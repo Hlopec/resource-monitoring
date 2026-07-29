@@ -7,6 +7,8 @@ This repository is being prepared as a local development workspace for a resourc
 ## Current development stage
 The project is currently in Stage 01.4: Docker developer workflow. This stage adds a repeatable Make-based workflow, environment setup helpers, and a smoke test for the local Docker Compose stack.
 
+Stage 02 — Database Foundation has started. This pull request adds architectural documentation only for the Resource Inventory domain model and ERD. ORM models, migrations, and business logic remain intentionally deferred.
+
 ## Prerequisites
 - macOS with Apple Silicon
 - Colima running with Docker support
