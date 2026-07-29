@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local Docker and project artifacts
+.docker/
+*.local
+*.bak
+*.tmp
+local_backups/
+
+# Project-specific local state
+coverage/
+artifacts/
