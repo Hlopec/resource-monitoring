@@ -1,11 +1,11 @@
 erDiagram
     tenant {
         UUID id PK
-        string tenant_code
+        string slug
         string display_name
+        string status
         timestamp created_at
         timestamp updated_at
-        boolean is_active
     }
 
     organization {
@@ -41,9 +41,9 @@ erDiagram
         UUID resource_type_id FK
         string canonical_name
         string display_name
-        UUID lifecycle_status_id
-        UUID criticality_id
-        UUID exposure_level_id
+        UUID lifecycle_status_id FK
+        UUID criticality_id FK
+        UUID exposure_level_id FK
         int source_priority
         decimal confidence_score
         timestamp first_seen_at
@@ -183,9 +183,9 @@ erDiagram
         UUID id PK
         UUID tenant_id FK
         UUID resource_id FK
-        UUID lifecycle_status_id
-        UUID criticality_id
-        UUID exposure_level_id
+        UUID lifecycle_status_id FK
+        UUID criticality_id FK
+        UUID exposure_level_id FK
         decimal confidence_score
         timestamp changed_at
         string changed_by_type
@@ -258,12 +258,8 @@ erDiagram
     tenant ||--o{ organization : contains
     tenant ||--o{ resource : owns
     tenant ||--o{ resource_identifier : owns
-    tenant ||--o{ ownership_role : defines
     tenant ||--o{ resource_ownership : owns
-    tenant ||--o{ relationship_type : defines
     tenant ||--o{ resource_relationship : owns
-    tenant ||--o{ classification_type : defines
-    tenant ||--o{ classification_value : defines
     tenant ||--o{ resource_classification : owns
     tenant ||--o{ label : defines
     tenant ||--o{ resource_label : owns

@@ -20,7 +20,7 @@ The model does not treat downstream observations, technology detections, finding
 
 ### Tenant
 
-A tenant is the top-level isolation boundary for all data in the domain. Every tenant-owned entity carries a tenant identifier and remains scoped to tenant-local governance and future tenant-based sharding.
+A tenant is the top-level isolation boundary for all data in the domain. The logical tenant row uses `id`, `slug`, `display_name`, `status`, `created_at`, and `updated_at`. Every tenant-owned entity carries a tenant identifier and remains scoped to tenant-local governance and future tenant-based sharding.
 
 ### Organization
 
@@ -34,7 +34,7 @@ Resource types define a stable taxonomy for the domain and support future inheri
 
 Resource is the canonical logical record. It stores the current state of the resource, including lifecycle status, criticality, exposure level, identity confidence, and temporal observation markers. The entity includes a `record_version` field for optimistic concurrency control.
 
-The resource table does not carry `valid_from` and `valid_to` because those are represented by versioned relationships, ownership assignments, identifiers, and state-history rows rather than by the core resource row itself.
+The resource table does not carry `valid_from` and `valid_to` because those are represented by versioned relationships, ownership assignments, identifiers, and state-history rows rather than by the core resource row itself. The logical reference fields `lifecycle_status_id`, `criticality_id`, and `exposure_level_id` are modeled as foreign keys to managed reference catalogs, even though those catalog entities may be detailed later during the implementation stage.
 
 ### Resource identifier
 
@@ -58,7 +58,7 @@ Labels provide lightweight annotations without changing canonical identity. Reso
 
 ### Resource state history
 
-Resource state history is immutable append-only evidence of lifecycle transitions. It stores the state, confidence, reason, and source event that caused the transition.
+Resource state history is immutable append-only evidence of lifecycle transitions. It stores the state, confidence, reason, and source event that caused the transition. Its `lifecycle_status_id`, `criticality_id`, and `exposure_level_id` fields are logical foreign keys to the same managed reference catalogs used by `resource`.
 
 ### Resource merge
 
