@@ -7,13 +7,13 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       APP_PORT: ${API_PORT:-8000}
-    ports:
-      - "${API_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
+        required: true
       redis:
         condition: service_healthy
+        required: true
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()" ]
@@ -27,7 +27,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-resource_monitoring}
       POSTGRES_USER: ${POSTGRES_USER:-resource_monitoring}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-development-only}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
