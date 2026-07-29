@@ -216,3 +216,28 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local Docker and project artifacts
+.docker/
+*.local
+*.bak
+*.tmp
+local_backups/
+
+# Project-specific local state
+coverage/
+artifacts/
+
+# Runtime data and local filesystem artifacts
+.env
+logs/*
+!logs/.gitkeep
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+backups/postgresql/*
+!backups/postgresql/.gitkeep
+backups/config/*
+!backups/config/.gitkeep
+.DS_Store
