@@ -1,0 +1,297 @@
+erDiagram
+    tenant {
+        UUID id PK
+        string slug
+        string display_name
+        string status
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    organization {
+        UUID id PK
+        UUID tenant_id FK
+        UUID parent_organization_id FK
+        UUID organization_type_id FK
+        string canonical_name
+        string display_name
+        string external_key
+        string status
+        timestamp created_at
+        timestamp updated_at
+        timestamp archived_at
+    }
+
+    resource_type {
+        UUID id PK
+        string code
+        string display_name
+        UUID parent_type_id FK
+        string category
+        int schema_version
+        boolean is_system
+        boolean is_active
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    resource {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_type_id FK
+        string canonical_name
+        string display_name
+        UUID lifecycle_status_id FK
+        UUID criticality_id FK
+        UUID exposure_level_id FK
+        int source_priority
+        decimal confidence_score
+        timestamp first_seen_at
+        timestamp last_seen_at
+        timestamp confirmed_at
+        timestamp archived_at
+        timestamp created_at
+        timestamp updated_at
+        int record_version
+    }
+
+    identifier_type {
+        UUID id PK
+        string code
+        string display_name
+        string normalization_strategy
+        string uniqueness_scope
+        boolean is_case_sensitive
+        boolean is_system
+        boolean is_active
+    }
+
+    resource_identifier {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        UUID identifier_type_id FK
+        string namespace
+        string normalized_value
+        string original_value
+        string value_hash
+        boolean is_primary
+        decimal confidence_score
+        timestamp valid_from
+        timestamp valid_to
+        timestamp created_at
+    }
+
+    ownership_role {
+        UUID id PK
+        string code
+        string display_name
+        boolean is_system
+        boolean is_active
+    }
+
+    resource_ownership {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        UUID organization_id FK
+        UUID ownership_role_id FK
+        boolean is_primary
+        timestamp valid_from
+        timestamp valid_to
+        UUID source_id
+        decimal confidence_score
+        timestamp created_at
+    }
+
+    relationship_type {
+        UUID id PK
+        string code
+        string display_name
+        string inverse_code
+        string source_type_constraint
+        string target_type_constraint
+        boolean is_directional
+        boolean is_transitive
+        boolean is_system
+        boolean is_active
+    }
+
+    resource_relationship {
+        UUID id PK
+        UUID tenant_id FK
+        UUID source_resource_id FK
+        UUID relationship_type_id FK
+        UUID target_resource_id FK
+        decimal confidence_score
+        timestamp first_seen_at
+        timestamp last_seen_at
+        timestamp valid_from
+        timestamp valid_to
+        UUID source_id
+        jsonb attributes
+        timestamp created_at
+    }
+
+    classification_type {
+        UUID id PK
+        string code
+        string display_name
+        boolean is_system
+        boolean is_active
+    }
+
+    classification_value {
+        UUID id PK
+        UUID classification_type_id FK
+        string code
+        string display_name
+        boolean is_system
+        boolean is_active
+    }
+
+    resource_classification {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        UUID classification_value_id FK
+        timestamp valid_from
+        timestamp valid_to
+        timestamp created_at
+    }
+
+    label {
+        UUID id PK
+        UUID tenant_id FK
+        string code
+        string display_name
+        boolean is_system
+        boolean is_active
+    }
+
+    resource_label {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        UUID label_id FK
+        timestamp valid_from
+        timestamp valid_to
+        timestamp created_at
+    }
+
+    resource_state_history {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        UUID lifecycle_status_id FK
+        UUID criticality_id FK
+        UUID exposure_level_id FK
+        decimal confidence_score
+        timestamp changed_at
+        string changed_by_type
+        UUID changed_by_id
+        string reason_code
+        UUID source_event_id
+    }
+
+    resource_merge {
+        UUID id PK
+        UUID tenant_id FK
+        UUID source_resource_id FK
+        UUID target_resource_id FK
+        string merge_reason
+        string merge_strategy
+        UUID initiated_by
+        timestamp merged_at
+        jsonb metadata
+    }
+
+    domain_resource {
+        UUID resource_id PK, FK
+        string fqdn
+        string registrable_domain
+        string public_suffix
+        boolean is_idn
+    }
+
+    ip_resource {
+        UUID resource_id PK, FK
+        inet address
+        int ip_version
+        boolean is_public
+    }
+
+    url_resource {
+        UUID resource_id PK, FK
+        string scheme
+        string host
+        int port
+        string path
+        string query_hash
+        string normalized_url
+    }
+
+    network_service_resource {
+        UUID resource_id PK, FK
+        UUID ip_resource_id FK
+        string transport_protocol
+        int port
+        string application_protocol
+    }
+
+    repository_resource {
+        UUID resource_id PK, FK
+        string provider
+        string owner_path
+        string repository_name
+        string provider_repository_id
+        string default_branch
+    }
+
+    container_image_resource {
+        UUID resource_id PK, FK
+        string registry
+        string repository
+        string digest
+    }
+
+    tenant ||--o{ organization : contains
+    tenant ||--o{ resource : owns
+    tenant ||--o{ resource_identifier : owns
+    tenant ||--o{ resource_ownership : owns
+    tenant ||--o{ resource_relationship : owns
+    tenant ||--o{ resource_classification : owns
+    tenant ||--o{ label : defines
+    tenant ||--o{ resource_label : owns
+    tenant ||--o{ resource_state_history : owns
+    tenant ||--o{ resource_merge : owns
+
+    organization ||--o{ resource_ownership : is_owned_by
+    organization ||--o{ organization : parent_child
+
+    resource_type ||--o{ resource_type : parent_child
+    resource_type ||--o{ resource : classifies
+
+    resource ||--o{ resource_identifier : has
+    resource ||--o{ resource_ownership : has
+    resource ||--o{ resource_relationship : source
+    resource ||--o{ resource_relationship : target
+    resource ||--o{ resource_classification : has
+    resource ||--o{ resource_label : has
+    resource ||--o{ resource_state_history : transitions
+    resource ||--o{ resource_merge : merged_from
+    resource ||--o{ resource_merge : merged_to
+    resource ||--o| domain_resource : extends
+    resource ||--o| ip_resource : extends
+    resource ||--o| url_resource : extends
+    resource ||--o| network_service_resource : extends
+    resource ||--o| repository_resource : extends
+    resource ||--o| container_image_resource : extends
+
+    identifier_type ||--o{ resource_identifier : defines
+    ownership_role ||--o{ resource_ownership : defines
+    relationship_type ||--o{ resource_relationship : defines
+    classification_type ||--o{ classification_value : contains
+    classification_value ||--o{ resource_classification : assigned_as
+    label ||--o{ resource_label : assigned_as
+    ip_resource ||--o{ network_service_resource : serves
