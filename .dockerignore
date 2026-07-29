@@ -29,3 +29,7 @@ build/
 *.egg-info/
 *.sqlite3
 local_backups/
+logs/
+data/raw/
+data/processed/
+backups/
