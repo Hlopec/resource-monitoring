@@ -7,6 +7,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -19,11 +20,6 @@ class Organization(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "organization"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_organization_tenant_id_id"),
-        UniqueConstraint(
-            "tenant_id",
-            "external_key",
-            name="uq_organization_tenant_id_external_key",
-        ),
         ForeignKeyConstraint(
             ["tenant_id", "parent_organization_id"],
             ["organization.tenant_id", "organization.id"],
@@ -31,6 +27,17 @@ class Organization(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
             ondelete="RESTRICT",
         ),
         CheckConstraint("canonical_name <> ''", name="canonical_name_not_empty"),
+        CheckConstraint(
+            "parent_organization_id IS NULL OR parent_organization_id <> id",
+            name="parent_organization_not_self",
+        ),
+        Index(
+            "uq_organization_tenant_id_external_key_not_null",
+            "tenant_id",
+            "external_key",
+            unique=True,
+            postgresql_where=text("external_key IS NOT NULL"),
+        ),
         Index("ix_organization_tenant_id_status", "tenant_id", "status"),
         Index("ix_organization_tenant_id_canonical_name", "tenant_id", "canonical_name"),
     )

@@ -10,9 +10,7 @@ class DatabaseSettings(BaseSettings):
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
     postgres_db: str = Field(default="resource_monitoring", alias="POSTGRES_DB")
     postgres_user: str = Field(default="resource_monitoring", alias="POSTGRES_USER")
-    postgres_password: SecretStr = Field(
-        default=SecretStr("local-development-only"), alias="POSTGRES_PASSWORD"
-    )
+    postgres_password: SecretStr = Field(alias="POSTGRES_PASSWORD")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

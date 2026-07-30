@@ -25,6 +25,8 @@ def upgrade() -> None:
         sa.Column("is_system", sa.Boolean(), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
             "code <> ''", name=op.f("ck_classification_type_code_not_empty")
         ),
@@ -44,6 +46,8 @@ def upgrade() -> None:
         sa.Column("is_system", sa.Boolean(), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint("code <> ''", name=op.f("ck_identifier_type_code_not_empty")),
         sa.CheckConstraint(
             "code = lower(code)", name=op.f("ck_identifier_type_code_normalized")
@@ -58,6 +62,8 @@ def upgrade() -> None:
         sa.Column("is_system", sa.Boolean(), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint("code <> ''", name=op.f("ck_ownership_role_code_not_empty")),
         sa.CheckConstraint(
             "code = lower(code)", name=op.f("ck_ownership_role_code_normalized")
@@ -77,6 +83,8 @@ def upgrade() -> None:
         sa.Column("is_system", sa.Boolean(), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint("code <> ''", name=op.f("ck_relationship_type_code_not_empty")),
         sa.CheckConstraint(
             "code = lower(code)", name=op.f("ck_relationship_type_code_normalized")
@@ -130,6 +138,8 @@ def upgrade() -> None:
         sa.Column("is_system", sa.Boolean(), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint("code <> ''", name=op.f("ck_classification_value_code_not_empty")),
         sa.CheckConstraint(
             "code = lower(code)", name=op.f("ck_classification_value_code_normalized")
@@ -162,6 +172,10 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "canonical_name <> ''", name=op.f("ck_organization_canonical_name_not_empty")
         ),
+        sa.CheckConstraint(
+            "parent_organization_id IS NULL OR parent_organization_id <> id",
+            name=op.f("ck_organization_parent_organization_not_self"),
+        ),
         sa.ForeignKeyConstraint(
             ["tenant_id"],
             ["tenant.id"],
@@ -175,12 +189,14 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_organization")),
-        sa.UniqueConstraint(
-            "tenant_id",
-            "external_key",
-            name="uq_organization_tenant_id_external_key",
-        ),
         sa.UniqueConstraint("tenant_id", "id", name="uq_organization_tenant_id_id"),
+    )
+    op.create_index(
+        "uq_organization_tenant_id_external_key_not_null",
+        "organization",
+        ["tenant_id", "external_key"],
+        unique=True,
+        postgresql_where=sa.text("external_key IS NOT NULL"),
     )
     op.create_index(
         "ix_organization_tenant_id_canonical_name",
@@ -197,6 +213,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index(
+        "uq_organization_tenant_id_external_key_not_null",
+        table_name="organization",
+        postgresql_where=sa.text("external_key IS NOT NULL"),
+    )
     op.drop_index("ix_organization_tenant_id_status", table_name="organization")
     op.drop_index("ix_organization_tenant_id_canonical_name", table_name="organization")
     op.drop_table("organization")

@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from contextlib import contextmanager
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -14,6 +15,13 @@ def get_session() -> Generator[Session, None, None]:
         yield session
 
 
+@contextmanager
 def transaction_session() -> Generator[Session, None, None]:
-    with SessionLocal.begin() as session:
-        yield session
+    """Commit on successful exit; rollback and re-raise on any exception."""
+    with SessionLocal() as session:
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise

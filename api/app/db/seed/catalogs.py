@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -21,6 +22,10 @@ from app.models import (
 class CatalogSeedResult:
     inserted: int
     existing: int
+
+
+class CatalogSeedConflict(RuntimeError):
+    pass
 
 
 BASELINE_RESOURCE_TYPES = (
@@ -111,13 +116,44 @@ def _upsert_by_code(
     existing = 0
     for record in records:
         code = str(record["code"])
+        expected_id = record["id"]
+        instance = session.scalar(select(model).where(model.code == code))
+        if instance is not None:
+            _validate_seed_identity(model.__tablename__, code, instance.id, expected_id)
+            existing += 1
+            continue
+
+        result = session.execute(
+            insert(model.__table__)
+            .values(**record)
+            .on_conflict_do_nothing(index_elements=["code"])
+            .returning(model.id)
+        )
+        inserted_id = result.scalar_one_or_none()
         instance = session.scalar(select(model).where(model.code == code))
         if instance is None:
-            session.add(model(**record))
+            raise CatalogSeedConflict(
+                f"{model.__tablename__} seed failed for code={code!r}"
+            )
+        _validate_seed_identity(model.__tablename__, code, instance.id, expected_id)
+        if inserted_id is not None:
             inserted += 1
         else:
             existing += 1
     return CatalogSeedResult(inserted=inserted, existing=existing)
+
+
+def _validate_seed_identity(
+    table_name: str,
+    code: str,
+    actual_id: UUID,
+    expected_id: object,
+) -> None:
+    if actual_id != expected_id:
+        raise CatalogSeedConflict(
+            f"{table_name} seed conflict for code={code!r}: "
+            f"existing id {actual_id} does not match expected deterministic id {expected_id}"
+        )
 
 
 def seed_catalogs(session: Session) -> CatalogSeedResult:
@@ -149,14 +185,40 @@ def seed_catalogs(session: Session) -> CatalogSeedResult:
                 ClassificationValue.code == code,
             )
         )
+        if instance is not None:
+            _validate_seed_identity(
+                ClassificationValue.__tablename__, code, instance.id, record["id"]
+            )
+            existing += 1
+            continue
+
+        payload = {
+            "id": record["id"],
+            "classification_type_id": classification_type_id,
+            "code": code,
+            "display_name": record["display_name"],
+        }
+        result = session.execute(
+            insert(ClassificationValue.__table__)
+            .values(**payload)
+            .on_conflict_do_nothing(index_elements=["classification_type_id", "code"])
+            .returning(ClassificationValue.id)
+        )
+        inserted_id = result.scalar_one_or_none()
+        instance = session.scalar(
+            select(ClassificationValue).where(
+                ClassificationValue.classification_type_id == classification_type_id,
+                ClassificationValue.code == code,
+            )
+        )
         if instance is None:
-            payload = {
-                "id": record["id"],
-                "classification_type_id": classification_type_id,
-                "code": code,
-                "display_name": record["display_name"],
-            }
-            session.add(ClassificationValue(**payload))
+            raise CatalogSeedConflict(
+                f"classification_value seed failed for code={code!r}"
+            )
+        _validate_seed_identity(
+            ClassificationValue.__tablename__, code, instance.id, record["id"]
+        )
+        if inserted_id is not None:
             inserted += 1
         else:
             existing += 1

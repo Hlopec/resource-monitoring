@@ -32,7 +32,7 @@ class ResourceType(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
     )
 
 
-class IdentifierType(UUIDv7PrimaryKeyMixin, Base):
+class IdentifierType(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "identifier_type"
     __table_args__ = (
         CheckConstraint("code <> ''", name="code_not_empty"),
@@ -48,7 +48,7 @@ class IdentifierType(UUIDv7PrimaryKeyMixin, Base):
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
 
 
-class OwnershipRole(UUIDv7PrimaryKeyMixin, Base):
+class OwnershipRole(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "ownership_role"
     __table_args__ = (
         CheckConstraint("code <> ''", name="code_not_empty"),
@@ -61,7 +61,7 @@ class OwnershipRole(UUIDv7PrimaryKeyMixin, Base):
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
 
 
-class RelationshipType(UUIDv7PrimaryKeyMixin, Base):
+class RelationshipType(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "relationship_type"
     __table_args__ = (
         CheckConstraint("code <> ''", name="code_not_empty"),
@@ -79,7 +79,7 @@ class RelationshipType(UUIDv7PrimaryKeyMixin, Base):
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
 
 
-class ClassificationType(UUIDv7PrimaryKeyMixin, Base):
+class ClassificationType(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "classification_type"
     __table_args__ = (
         CheckConstraint("code <> ''", name="code_not_empty"),
@@ -97,7 +97,7 @@ class ClassificationType(UUIDv7PrimaryKeyMixin, Base):
     )
 
 
-class ClassificationValue(UUIDv7PrimaryKeyMixin, Base):
+class ClassificationValue(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "classification_value"
     __table_args__ = (
         UniqueConstraint(

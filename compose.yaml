@@ -4,6 +4,12 @@ services:
       context: ./api
       dockerfile: Dockerfile
     image: resource-monitoring-api:local
+    environment:
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-resource_monitoring}
+      POSTGRES_USER: ${POSTGRES_USER:-resource_monitoring}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     depends_on:
       postgres:
         condition: service_healthy

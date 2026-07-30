@@ -7,7 +7,7 @@ from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.seed.catalogs import seed_catalogs
+from app.db.seed.catalogs import CatalogSeedConflict, seed_catalogs
 from app.models import IdentifierType, Organization, ResourceType, Tenant
 
 
@@ -95,6 +95,25 @@ def test_organization_tenant_aware_hierarchy(db_session: Session) -> None:
     assert child.parent_organization_id == parent.id
 
 
+def test_self_parent_organization_is_rejected(db_session: Session) -> None:
+    tenant = Tenant(slug="tenant-a", display_name="Tenant A", status="active")
+    db_session.add(tenant)
+    db_session.flush()
+
+    organization = Organization(
+        tenant_id=tenant.id,
+        canonical_name="platform",
+        display_name="Platform",
+        status="active",
+    )
+    db_session.add(organization)
+    db_session.flush()
+
+    organization.parent_organization_id = organization.id
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+
+
 def test_cross_tenant_parent_is_rejected(db_session: Session) -> None:
     tenant_a = Tenant(slug="tenant-a", display_name="Tenant A", status="active")
     tenant_b = Tenant(slug="tenant-b", display_name="Tenant B", status="active")
@@ -175,3 +194,18 @@ def test_seed_idempotency(db_session: Session) -> None:
     assert first.existing == 0
     assert second.inserted == 0
     assert second.existing == first.inserted
+
+
+def test_seed_rejects_system_code_with_unexpected_id(db_session: Session) -> None:
+    db_session.add(
+        ResourceType(
+            code="domain",
+            display_name="Conflicting domain",
+            category="internet",
+            is_system=True,
+        )
+    )
+    db_session.flush()
+
+    with pytest.raises(CatalogSeedConflict, match="domain"):
+        seed_catalogs(db_session)

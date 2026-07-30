@@ -26,6 +26,8 @@ Database settings are read from environment variables or `.env`:
 - `POSTGRES_PASSWORD`
 
 The application builds a SQLAlchemy URL from typed settings. Secrets are not committed.
+`POSTGRES_PASSWORD` is required at runtime. Local development values live in `.env.example`; application settings fail fast when the password is absent.
+Docker Compose passes the `POSTGRES_*` settings into the API container so Alembic, tests, and seed commands use the same typed settings as application code.
 
 ## Migrations
 
@@ -43,8 +45,14 @@ Use:
 ## UUIDv7 and timestamps
 
 Major entity primary keys use a centralized UUIDv7 generator in `app.db.uuid`. Application-side ID defaults make IDs available before flush when the object is constructed through SQLAlchemy defaults.
+The generator is protected by a process-local lock. If the 12-bit monotonic sequence is exhausted within one millisecond, generation waits for the next clock millisecond rather than wrapping the sequence.
 
 Timestamp columns use PostgreSQL `TIMESTAMPTZ` via SQLAlchemy timezone-aware `DateTime`. Application defaults use UTC-aware datetimes for `created_at` and `updated_at`.
+All managed catalog models use the same timestamp policy.
+
+## Organization hierarchy
+
+The database rejects direct self-parenting through `parent_organization_id IS NULL OR parent_organization_id <> id`. More complex hierarchy cycles, such as `A -> B -> A`, are intentionally deferred to the application or service layer in a later stage.
 
 ## Catalog seed
 
@@ -53,6 +61,7 @@ Run:
 - `make db-seed`
 
 The seed inserts only a minimal baseline for managed reference catalogs. It is idempotent, deterministic by catalog `code`, and does not overwrite existing catalog rows.
+If a seeded system catalog `code` already exists with a different deterministic UUID, the seed exits with a clear conflict error instead of creating a duplicate or silently accepting the mismatch. Inserts use PostgreSQL conflict handling so concurrent seed runs do not create duplicate rows.
 
 ## Tests
 
