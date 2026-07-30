@@ -27,10 +27,14 @@ class ResourceIdentifier(UUIDv7PrimaryKeyMixin, Base):
             name="fk_resource_identifier_resource_id_resource",
             ondelete="RESTRICT",
         ),
-        CheckConstraint("namespace IS NULL OR namespace <> ''", name="namespace_not_empty"),
-        CheckConstraint("normalized_value <> ''", name="normalized_value_not_empty"),
-        CheckConstraint("original_value <> ''", name="original_value_not_empty"),
-        CheckConstraint("value_hash <> ''", name="value_hash_not_empty"),
+        CheckConstraint(
+            "namespace IS NULL OR btrim(namespace) <> ''", name="namespace_not_empty"
+        ),
+        CheckConstraint(
+            "btrim(normalized_value) <> ''", name="normalized_value_not_empty"
+        ),
+        CheckConstraint("btrim(original_value) <> ''", name="original_value_not_empty"),
+        CheckConstraint("btrim(value_hash) <> ''", name="value_hash_not_empty"),
         CheckConstraint(
             "confidence_score >= 0.0000 AND confidence_score <= 1.0000",
             name="confidence_score_range",
@@ -61,6 +65,7 @@ class ResourceIdentifier(UUIDv7PrimaryKeyMixin, Base):
         ),
         Index(
             "uq_resource_identifier_current_primary",
+            "tenant_id",
             "resource_id",
             "identifier_type_id",
             unique=True,

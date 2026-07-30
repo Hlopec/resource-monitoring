@@ -27,8 +27,8 @@ class Resource(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
             name="fk_resource_tenant_id_tenant",
             ondelete="RESTRICT",
         ),
-        CheckConstraint("canonical_name <> ''", name="canonical_name_not_empty"),
-        CheckConstraint("display_name <> ''", name="display_name_not_empty"),
+        CheckConstraint("btrim(canonical_name) <> ''", name="canonical_name_not_empty"),
+        CheckConstraint("btrim(display_name) <> ''", name="display_name_not_empty"),
         CheckConstraint(
             "source_priority >= 0 AND source_priority <= 1000",
             name="source_priority_range",
@@ -78,6 +78,9 @@ class Resource(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
     confirmed_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
     archived_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
     record_version: Mapped[int] = mapped_column(nullable=False, default=1)
+    __mapper_args__ = {
+        "version_id_col": record_version,
+    }
 
     identifiers: Mapped[list["ResourceIdentifier"]] = relationship(
         back_populates="resource",

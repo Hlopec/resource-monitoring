@@ -61,10 +61,12 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("record_version", sa.Integer(), nullable=False),
         sa.CheckConstraint(
-            "canonical_name <> ''", name=op.f("ck_resource_canonical_name_not_empty")
+            "btrim(canonical_name) <> ''",
+            name=op.f("ck_resource_canonical_name_not_empty"),
         ),
         sa.CheckConstraint(
-            "display_name <> ''", name=op.f("ck_resource_display_name_not_empty")
+            "btrim(display_name) <> ''",
+            name=op.f("ck_resource_display_name_not_empty"),
         ),
         sa.CheckConstraint(
             "source_priority >= 0 AND source_priority <= 1000",
@@ -166,19 +168,20 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.CheckConstraint(
-            "namespace IS NULL OR namespace <> ''",
+            "namespace IS NULL OR btrim(namespace) <> ''",
             name=op.f("ck_resource_identifier_namespace_not_empty"),
         ),
         sa.CheckConstraint(
-            "normalized_value <> ''",
+            "btrim(normalized_value) <> ''",
             name=op.f("ck_resource_identifier_normalized_value_not_empty"),
         ),
         sa.CheckConstraint(
-            "original_value <> ''",
+            "btrim(original_value) <> ''",
             name=op.f("ck_resource_identifier_original_value_not_empty"),
         ),
         sa.CheckConstraint(
-            "value_hash <> ''", name=op.f("ck_resource_identifier_value_hash_not_empty")
+            "btrim(value_hash) <> ''",
+            name=op.f("ck_resource_identifier_value_hash_not_empty"),
         ),
         sa.CheckConstraint(
             "confidence_score >= 0.0000 AND confidence_score <= 1.0000",
@@ -241,7 +244,7 @@ def upgrade() -> None:
     op.create_index(
         "uq_resource_identifier_current_primary",
         "resource_identifier",
-        ["resource_id", "identifier_type_id"],
+        ["tenant_id", "resource_id", "identifier_type_id"],
         unique=True,
         postgresql_where=sa.text("is_primary = true AND valid_to IS NULL"),
     )

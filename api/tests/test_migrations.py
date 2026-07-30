@@ -80,3 +80,28 @@ def test_downgrade_new_head_to_previous_revision(alembic_config: Config) -> None
     finally:
         engine.dispose()
         command.downgrade(alembic_config, "base")
+
+
+def test_current_primary_identifier_index_is_tenant_first(
+    alembic_config: Config,
+) -> None:
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(get_database_settings().sqlalchemy_url)
+    try:
+        with engine.connect() as connection:
+            indexdef = connection.execute(
+                text(
+                    "SELECT pg_get_indexdef(indexrelid) "
+                    "FROM pg_index "
+                    "WHERE indexrelid = "
+                    "'uq_resource_identifier_current_primary'::regclass"
+                )
+            ).scalar_one()
+
+        normalized = " ".join(indexdef.split())
+        assert "UNIQUE INDEX uq_resource_identifier_current_primary" in normalized
+        assert "(tenant_id, resource_id, identifier_type_id)" in normalized
+        assert "WHERE ((is_primary = true) AND (valid_to IS NULL))" in normalized
+    finally:
+        engine.dispose()
+        command.downgrade(alembic_config, "base")

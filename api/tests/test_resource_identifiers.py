@@ -6,8 +6,10 @@ from uuid import UUID
 
 import pytest
 from sqlalchemy import delete, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.db.seed.catalogs import CatalogSeedConflict, seed_catalogs
 from app.models import (
@@ -130,7 +132,10 @@ def test_resource_lookup_fks(db_session: Session) -> None:
 
 
 @pytest.mark.parametrize("field", ["canonical_name", "display_name"])
-def test_resource_names_must_be_non_empty(db_session: Session, field: str) -> None:
+@pytest.mark.parametrize("value", ["", "   "])
+def test_resource_names_must_be_non_empty(
+    db_session: Session, field: str, value: str
+) -> None:
     refs = _seed_references(db_session)
     now = datetime.now(UTC)
     payload = {
@@ -144,11 +149,22 @@ def test_resource_names_must_be_non_empty(db_session: Session, field: str) -> No
         "first_seen_at": now,
         "last_seen_at": now,
     }
-    payload[field] = ""
+    payload[field] = value
     db_session.add(Resource(**payload))
 
     with pytest.raises(IntegrityError):
         db_session.flush()
+
+
+@pytest.mark.parametrize("source_priority", [0, 1000])
+def test_resource_source_priority_allows_boundaries(
+    db_session: Session, source_priority: int
+) -> None:
+    resource = _resource(db_session)
+    resource.source_priority = source_priority
+    db_session.flush()
+
+    assert resource.source_priority == source_priority
 
 
 @pytest.mark.parametrize("source_priority", [-1, 1001])
@@ -160,6 +176,17 @@ def test_resource_source_priority_boundaries(
 
     with pytest.raises(IntegrityError):
         db_session.flush()
+
+
+@pytest.mark.parametrize("confidence_score", [Decimal("0.0000"), Decimal("1.0000")])
+def test_resource_confidence_score_allows_boundaries(
+    db_session: Session, confidence_score: Decimal
+) -> None:
+    resource = _resource(db_session)
+    resource.confidence_score = confidence_score
+    db_session.flush()
+
+    assert resource.confidence_score == confidence_score
 
 
 @pytest.mark.parametrize("confidence_score", [Decimal("-0.0001"), Decimal("1.0001")])
@@ -219,20 +246,60 @@ def test_resource_identifier_valid_to_must_be_after_valid_from(db_session: Sessi
         db_session.flush()
 
 
+@pytest.mark.parametrize("namespace", ["", "   "])
+def test_resource_identifier_namespace_must_be_non_empty_when_present(
+    db_session: Session, namespace: str
+) -> None:
+    resource = _resource(db_session)
+    identifier_type_id = db_session.scalar(
+        select(IdentifierType.id).where(IdentifierType.code == "fqdn")
+    )
+    db_session.add(_identifier(resource, identifier_type_id, namespace=namespace))
+
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+
+
+def test_resource_identifier_null_namespace_is_allowed(db_session: Session) -> None:
+    resource = _resource(db_session)
+    identifier_type_id = db_session.scalar(
+        select(IdentifierType.id).where(IdentifierType.code == "fqdn")
+    )
+    db_session.add(_identifier(resource, identifier_type_id, namespace=None))
+    db_session.flush()
+
+
 @pytest.mark.parametrize("field", ["normalized_value", "original_value", "value_hash"])
+@pytest.mark.parametrize("value", ["", "   "])
 def test_resource_identifier_values_must_be_non_empty(
-    db_session: Session, field: str
+    db_session: Session, field: str, value: str
 ) -> None:
     resource = _resource(db_session)
     identifier_type_id = db_session.scalar(
         select(IdentifierType.id).where(IdentifierType.code == "fqdn")
     )
     identifier = _identifier(resource, identifier_type_id)
-    setattr(identifier, field, "")
+    setattr(identifier, field, value)
     db_session.add(identifier)
 
     with pytest.raises(IntegrityError):
         db_session.flush()
+
+
+@pytest.mark.parametrize("confidence_score", [Decimal("0.0000"), Decimal("1.0000")])
+def test_resource_identifier_confidence_score_allows_boundaries(
+    db_session: Session, confidence_score: Decimal
+) -> None:
+    resource = _resource(db_session)
+    identifier_type_id = db_session.scalar(
+        select(IdentifierType.id).where(IdentifierType.code == "fqdn")
+    )
+    identifier = _identifier(resource, identifier_type_id)
+    identifier.confidence_score = confidence_score
+    db_session.add(identifier)
+    db_session.flush()
+
+    assert identifier.confidence_score == confidence_score
 
 
 @pytest.mark.parametrize("confidence_score", [Decimal("-0.0001"), Decimal("1.0001")])
@@ -262,6 +329,32 @@ def test_duplicate_current_identifier_is_rejected(db_session: Session) -> None:
 
     with pytest.raises(IntegrityError):
         db_session.flush()
+
+
+def test_distinct_namespaces_allow_same_current_identifier_value(
+    db_session: Session,
+) -> None:
+    resource = _resource(db_session)
+    identifier_type_id = db_session.scalar(
+        select(IdentifierType.id).where(IdentifierType.code == "fqdn")
+    )
+    db_session.add(
+        _identifier(
+            resource,
+            identifier_type_id,
+            normalized_value="example.com",
+            namespace="dns",
+        )
+    )
+    db_session.add(
+        _identifier(
+            resource,
+            identifier_type_id,
+            normalized_value="example.com",
+            namespace="certificate-san",
+        )
+    )
+    db_session.flush()
 
 
 def test_historical_identifier_can_be_reused_after_valid_to(db_session: Session) -> None:
@@ -356,6 +449,50 @@ def test_historical_primary_identifier_is_preserved(db_session: Session) -> None
         )
     )
     db_session.flush()
+
+
+def test_resource_sequential_update_increments_record_version(
+    db_session: Session,
+) -> None:
+    resource = _resource(db_session)
+    assert resource.record_version == 1
+
+    resource.display_name = "Example Updated"
+    db_session.flush()
+
+    assert resource.record_version == 2
+
+
+def test_resource_stale_concurrent_update_raises_stale_data_error(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = sessionmaker(bind=migrated_engine, expire_on_commit=False)
+    with SessionLocal() as setup_session:
+        resource = _resource(setup_session)
+        resource_id = resource.id
+        setup_session.commit()
+
+    first_session = SessionLocal()
+    second_session = SessionLocal()
+    try:
+        first_resource = first_session.get(Resource, resource_id)
+        second_resource = second_session.get(Resource, resource_id)
+        assert first_resource is not None
+        assert second_resource is not None
+        assert first_resource.record_version == 1
+        assert second_resource.record_version == 1
+
+        first_resource.display_name = "Updated by first session"
+        first_session.commit()
+        assert first_resource.record_version == 2
+
+        second_resource.display_name = "Updated by stale second session"
+        with pytest.raises(StaleDataError):
+            second_session.commit()
+        second_session.rollback()
+    finally:
+        first_session.close()
+        second_session.close()
 
 
 def test_resource_identifier_seed_idempotency(db_session: Session) -> None:

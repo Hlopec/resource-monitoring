@@ -70,9 +70,13 @@ Resource archive behavior is logical. `archived_at` records archive state withou
 
 Current identifier uniqueness is enforced by a PostgreSQL partial unique expression index over `tenant_id`, `identifier_type_id`, `COALESCE(namespace, '')`, and `normalized_value` where `valid_to IS NULL`. This defines null namespace semantics explicitly: `NULL` namespace is normalized to the empty namespace for uniqueness checks.
 
-Current primary identifier uniqueness is enforced by a partial unique index over `resource_id` and `identifier_type_id` where `is_primary = true AND valid_to IS NULL`. Historical primary identifiers with `valid_to` set remain preserved.
+Current primary identifier uniqueness is enforced by a tenant-first partial unique index over `tenant_id`, `resource_id`, and `identifier_type_id` where `is_primary = true AND valid_to IS NULL`. Historical primary identifiers with `valid_to` set remain preserved.
 
 `value_hash` is a lookup accelerator only. It is not collision-proof identity. Matching logic must perform a full `normalized_value` comparison after hash lookup, and distinct normalized values with the same hash are allowed.
+
+`resource_identifier` is modeled as a temporal fact, not as a mutable current-state row. Changing identity fields on an existing row is not the recommended operation. The intended application-level policy is to close the old row by setting `valid_to` and insert a new row with the replacement identity evidence. At this stage the database enforces the validity window, current-row uniqueness, and restrictive foreign keys; it does not add a trigger-based immutable framework.
+
+The table intentionally has `created_at` without `updated_at` because identifier rows are append-oriented temporal facts. Subsequent corrections should be represented by new temporal rows instead of in-place identity mutation.
 
 ## Organization hierarchy
 
