@@ -9,6 +9,22 @@ EXPECTED_TABLES = [
     "alembic_version",
     "classification_type",
     "classification_value",
+    "criticality",
+    "exposure_level",
+    "identifier_type",
+    "lifecycle_status",
+    "organization",
+    "ownership_role",
+    "relationship_type",
+    "resource",
+    "resource_identifier",
+    "resource_type",
+    "tenant",
+]
+PREVIOUS_REVISION_TABLES = [
+    "alembic_version",
+    "classification_type",
+    "classification_value",
     "identifier_type",
     "organization",
     "ownership_role",
@@ -16,6 +32,7 @@ EXPECTED_TABLES = [
     "resource_type",
     "tenant",
 ]
+PREVIOUS_REVISION = "202607300001"
 
 
 def test_upgrade_empty_database_to_head(alembic_config: Config) -> None:
@@ -41,3 +58,50 @@ def test_downgrade_head_to_empty_database(alembic_config: Config) -> None:
         assert version_rows == 0
     finally:
         engine.dispose()
+
+
+def test_upgrade_previous_revision_to_new_head(alembic_config: Config) -> None:
+    command.upgrade(alembic_config, PREVIOUS_REVISION)
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(get_database_settings().sqlalchemy_url)
+    try:
+        assert list_user_tables(engine) == EXPECTED_TABLES
+    finally:
+        engine.dispose()
+        command.downgrade(alembic_config, "base")
+
+
+def test_downgrade_new_head_to_previous_revision(alembic_config: Config) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, PREVIOUS_REVISION)
+    engine = create_engine(get_database_settings().sqlalchemy_url)
+    try:
+        assert list_user_tables(engine) == PREVIOUS_REVISION_TABLES
+    finally:
+        engine.dispose()
+        command.downgrade(alembic_config, "base")
+
+
+def test_current_primary_identifier_index_is_tenant_first(
+    alembic_config: Config,
+) -> None:
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(get_database_settings().sqlalchemy_url)
+    try:
+        with engine.connect() as connection:
+            indexdef = connection.execute(
+                text(
+                    "SELECT pg_get_indexdef(indexrelid) "
+                    "FROM pg_index "
+                    "WHERE indexrelid = "
+                    "'uq_resource_identifier_current_primary'::regclass"
+                )
+            ).scalar_one()
+
+        normalized = " ".join(indexdef.split())
+        assert "UNIQUE INDEX uq_resource_identifier_current_primary" in normalized
+        assert "(tenant_id, resource_id, identifier_type_id)" in normalized
+        assert "WHERE ((is_primary = true) AND (valid_to IS NULL))" in normalized
+    finally:
+        engine.dispose()
+        command.downgrade(alembic_config, "base")

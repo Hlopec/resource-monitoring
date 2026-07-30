@@ -36,9 +36,13 @@ Resource is the canonical logical record. It stores the current state of the res
 
 The resource table does not carry `valid_from` and `valid_to` because those are represented by versioned relationships, ownership assignments, identifiers, and state-history rows rather than by the core resource row itself. The logical reference fields `lifecycle_status_id`, `criticality_id`, and `exposure_level_id` are modeled as foreign keys to managed reference catalogs, even though those catalog entities may be detailed later during the implementation stage.
 
+`source_priority` is constrained to the range `0..1000`, `confidence_score` is constrained to `0.0000..1.0000`, and `record_version` must remain greater than zero. Resource archive behavior is logical through `archived_at`.
+
 ### Resource identifier
 
 Resource identifier stores a specific identifier value for a resource, using an identifier type and a normalized representation. Each assignment remains temporally versioned so that the identity evidence can be audited and superseded when required.
+
+Current identifier uniqueness is scoped to `tenant_id`, `identifier_type_id`, namespace, and `normalized_value`, with `NULL` namespace treated as the empty namespace for uniqueness. `value_hash` is only a lookup accelerator; identity matching still requires full `normalized_value` comparison after hash lookup, and hash collisions must not conflict when normalized values differ.
 
 ### Ownership role and resource ownership
 
@@ -175,7 +179,7 @@ The design applies the following constraints:
 
 The documentation adopts a single consistent model for reference catalogs:
 
-- System catalogs such as `resource_type`, `identifier_type`, `relationship_type`, `ownership_role`, `classification_type`, and `classification_value` are global managed reference data.
+- System catalogs such as `resource_type`, `identifier_type`, `lifecycle_status`, `criticality`, `exposure_level`, `relationship_type`, `ownership_role`, `classification_type`, and `classification_value` are global managed reference data.
 - Tenant-owned assignment and operational tables always contain `tenant_id`.
 - Tenant-specific overrides or extensions may be introduced later as separate entities if the product requires them.
 - `label` remains tenant-scoped because labels are operational annotations and not global reference data.

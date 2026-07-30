@@ -35,6 +35,36 @@ erDiagram
         timestamp updated_at
     }
 
+    lifecycle_status {
+        UUID id PK
+        string code
+        string display_name
+        boolean is_system
+        boolean is_active
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    criticality {
+        UUID id PK
+        string code
+        string display_name
+        boolean is_system
+        boolean is_active
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    exposure_level {
+        UUID id PK
+        string code
+        string display_name
+        boolean is_system
+        boolean is_active
+        timestamp created_at
+        timestamp updated_at
+    }
+
     resource {
         UUID id PK
         UUID tenant_id FK
@@ -271,6 +301,9 @@ erDiagram
 
     resource_type ||--o{ resource_type : parent_child
     resource_type ||--o{ resource : classifies
+    lifecycle_status ||--o{ resource : defines
+    criticality ||--o{ resource : defines
+    exposure_level ||--o{ resource : defines
 
     resource ||--o{ resource_identifier : has
     resource ||--o{ resource_ownership : has
@@ -293,5 +326,8 @@ erDiagram
     relationship_type ||--o{ resource_relationship : defines
     classification_type ||--o{ classification_value : contains
     classification_value ||--o{ resource_classification : assigned_as
+    lifecycle_status ||--o{ resource_state_history : records
+    criticality ||--o{ resource_state_history : records
+    exposure_level ||--o{ resource_state_history : records
     label ||--o{ resource_label : assigned_as
     ip_resource ||--o{ network_service_resource : serves
