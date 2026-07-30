@@ -2,7 +2,7 @@
 
 ROOT_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
-.PHONY: help env config build up status logs smoke-test down reset
+.PHONY: help env config build up status logs smoke-test down reset db-upgrade db-downgrade db-current db-history db-seed db-test
 
 help:
 	@echo 'Available targets:'
@@ -14,6 +14,12 @@ help:
 	@echo '  make status         Show the status of the Docker Compose services'
 	@echo '  make logs           Show API logs without color'
 	@echo '  make smoke-test     Run the full Docker Compose smoke test'
+	@echo '  make db-upgrade     Apply Alembic migrations to the development database'
+	@echo '  make db-downgrade   Downgrade the development database to an empty schema'
+	@echo '  make db-current     Show the current Alembic revision'
+	@echo '  make db-history     Show Alembic migration history'
+	@echo '  make db-seed        Seed baseline managed reference catalogs'
+	@echo '  make db-test        Run isolated database tests'
 	@echo '  make down           Stop the Docker Compose services without deleting volumes'
 	@echo '  make reset          Stop the Docker Compose services and delete volumes after confirmation'
 
@@ -42,6 +48,29 @@ logs:
 
 smoke-test:
 	@cd "$(ROOT_DIR)" && ./scripts/docker-smoke-test.sh
+
+db-upgrade:
+	@cd "$(ROOT_DIR)" && docker compose up -d postgres
+	@cd "$(ROOT_DIR)" && docker compose run --rm --build --no-deps api alembic upgrade head
+
+db-downgrade:
+	@cd "$(ROOT_DIR)" && docker compose up -d postgres
+	@cd "$(ROOT_DIR)" && docker compose run --rm --build --no-deps api alembic downgrade base
+
+db-current:
+	@cd "$(ROOT_DIR)" && docker compose up -d postgres
+	@cd "$(ROOT_DIR)" && docker compose run --rm --build --no-deps api alembic current
+
+db-history:
+	@cd "$(ROOT_DIR)" && docker compose run --rm --build --no-deps api alembic history
+
+db-seed:
+	@cd "$(ROOT_DIR)" && docker compose up -d postgres
+	@cd "$(ROOT_DIR)" && docker compose run --rm --build --no-deps api python -m app.db.seed_cli
+
+db-test:
+	@cd "$(ROOT_DIR)" && docker compose up -d postgres
+	@cd "$(ROOT_DIR)" && docker compose run --rm --build --no-deps -e POSTGRES_DB=resource_monitoring_test api pytest -q
 
 down:
 	@cd "$(ROOT_DIR)" && docker compose down

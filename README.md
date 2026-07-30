@@ -5,9 +5,7 @@ Platform for automated discovery, monitoring, vulnerability assessment, and secu
 This repository is being prepared as a local development workspace for a resource monitoring platform. The current focus is to establish the initial project structure for future API, worker, collector, database, integration, and infrastructure components.
 
 ## Current development stage
-The project is currently in Stage 01.4: Docker developer workflow. This stage adds a repeatable Make-based workflow, environment setup helpers, and a smoke test for the local Docker Compose stack.
-
-Stage 02 — Database Foundation has started. This pull request adds architectural documentation only for the Resource Inventory bounded context, including the ERD, lifecycle policy, indexing strategy, partitioning guidance, and ADRs. The database implementation itself is not yet performed; ORM models, migrations, SQL schema, API endpoints, repositories, collectors, and business logic remain intentionally deferred.
+The project is currently in Stage 02.0.2: Database Foundation. This stage adds the first PostgreSQL persistence layer for the Resource Inventory bounded context, including SQLAlchemy models, Alembic migrations, deterministic catalog seed data, and isolated database tests.
 
 ### Architecture documentation
 - [docs/architecture/database/README.md](docs/architecture/database/README.md)
@@ -16,6 +14,7 @@ Stage 02 — Database Foundation has started. This pull request adds architectur
 - [docs/architecture/database/indexing-strategy.md](docs/architecture/database/indexing-strategy.md)
 - [docs/architecture/database/partitioning-strategy.md](docs/architecture/database/partitioning-strategy.md)
 - [docs/architecture/database/erd/resource-inventory.mmd](docs/architecture/database/erd/resource-inventory.mmd)
+- [docs/development/database.md](docs/development/database.md)
 
 ## Prerequisites
 - macOS with Apple Silicon
@@ -36,6 +35,12 @@ The repository provides the following targets:
 - `make status` shows the container status
 - `make logs` shows API logs without color
 - `make smoke-test` runs the Docker Compose smoke test
+- `make db-upgrade` applies Alembic migrations
+- `make db-downgrade` downgrades the schema to empty
+- `make db-current` shows the current Alembic revision
+- `make db-history` shows migration history
+- `make db-seed` seeds baseline managed reference catalogs
+- `make db-test` runs isolated database tests
 - `make down` stops the stack without deleting named volumes
 - `make reset` stops the stack and deletes named volumes only after `CONFIRM_RESET=yes`
 
@@ -89,4 +94,4 @@ If health checks fail, inspect the service status and logs with:
 - `redis`: Redis 7 with a named persistent volume and health checks
 
 ## Deferred functionality
-Database integration in application code, Redis integration beyond basic service startup, workers, collectors, DefectDojo, monitoring, authentication, ORM, migrations, and business logic remain deferred beyond this stage.
+Redis integration beyond basic service startup, workers, collectors, DefectDojo, monitoring, authentication, API persistence endpoints, repositories, and business logic remain deferred beyond this stage.
