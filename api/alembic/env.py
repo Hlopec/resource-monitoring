@@ -5,7 +5,16 @@ from sqlalchemy import engine_from_config, pool
 
 from app.db.base import Base
 from app.db.settings import get_database_settings
-from app.models import catalogs, organization, resource, resource_identifier, resource_ownership, resource_relationship, tenant  # noqa: F401
+from app.models import (  # noqa: F401
+    catalogs,
+    organization,
+    resource,
+    resource_classification,
+    resource_identifier,
+    resource_ownership,
+    resource_relationship,
+    tenant,
+)
 
 config = context.config
 

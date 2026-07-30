@@ -105,6 +105,11 @@ class ClassificationValue(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
             "code",
             name="uq_classification_value_classification_type_id_code",
         ),
+        UniqueConstraint(
+            "classification_type_id",
+            "id",
+            name="uq_classification_value_classification_type_id_id",
+        ),
         CheckConstraint("code <> ''", name="code_not_empty"),
         CheckConstraint("code = lower(code)", name="code_normalized"),
     )
