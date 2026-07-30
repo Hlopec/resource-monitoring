@@ -135,9 +135,18 @@ def test_resource_ownership_indexes_are_tenant_first(
                     "'uq_resource_ownership_current_primary'::regclass"
                 )
             ).scalar_one()
+            access_index = connection.execute(
+                text(
+                    "SELECT pg_get_indexdef(indexrelid) "
+                    "FROM pg_index "
+                    "WHERE indexrelid = "
+                    "'ix_resource_ownership_tenant_resource_role'::regclass"
+                )
+            ).scalar_one()
 
         current_normalized = " ".join(current_index.split())
         primary_normalized = " ".join(primary_index.split())
+        access_normalized = " ".join(access_index.split())
         assert "UNIQUE INDEX uq_resource_ownership_current" in current_normalized
         assert (
             "(tenant_id, resource_id, organization_id, ownership_role_id)"
@@ -150,6 +159,13 @@ def test_resource_ownership_indexes_are_tenant_first(
         )
         assert "(tenant_id, resource_id, ownership_role_id)" in primary_normalized
         assert "WHERE ((is_primary = true) AND (valid_to IS NULL))" in primary_normalized
+        assert (
+            "CREATE INDEX ix_resource_ownership_tenant_resource_role"
+            in access_normalized
+        )
+        assert "(tenant_id, resource_id, ownership_role_id)" in access_normalized
+        assert "UNIQUE INDEX" not in access_normalized
+        assert " WHERE " not in access_normalized
     finally:
         engine.dispose()
         command.downgrade(alembic_config, "base")

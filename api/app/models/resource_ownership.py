@@ -52,6 +52,12 @@ class ResourceOwnership(UUIDv7PrimaryKeyMixin, Base):
         ),
         Index("ix_resource_ownership_tenant_id_valid_to", "tenant_id", "valid_to"),
         Index(
+            "ix_resource_ownership_tenant_resource_role",
+            "tenant_id",
+            "resource_id",
+            "ownership_role_id",
+        ),
+        Index(
             "uq_resource_ownership_current",
             "tenant_id",
             "resource_id",

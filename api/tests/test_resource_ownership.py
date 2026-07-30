@@ -5,7 +5,7 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -129,6 +129,8 @@ def test_resource_ownership_rejects_cross_tenant_resource(db_session: Session) -
     resource = _resource(db_session, tenant_a)
     organization = _organization(db_session, tenant_b, "platform")
     ownership = _ownership(resource, organization, _role_id(db_session))
+    # The organization composite FK is valid for tenant B; the resource composite
+    # FK is invalid because the referenced resource belongs to tenant A.
     ownership.tenant_id = tenant_b.id
     db_session.add(ownership)
 
@@ -253,6 +255,40 @@ def test_resource_ownership_historical_reuse_is_allowed(db_session: Session) -> 
     db_session.flush()
 
 
+def test_historical_primary_ownership_is_preserved(db_session: Session) -> None:
+    _seed_catalogs(db_session)
+    tenant = _tenant(db_session, "tenant-a")
+    resource = _resource(db_session, tenant)
+    first_org = _organization(db_session, tenant, "platform")
+    second_org = _organization(db_session, tenant, "security")
+    ownership_role_id = _role_id(db_session)
+    historical = _ownership(
+        resource,
+        first_org,
+        ownership_role_id,
+        is_primary=True,
+    )
+    historical.valid_to = historical.valid_from + timedelta(seconds=1)
+    db_session.add(historical)
+    db_session.flush()
+
+    current = _ownership(
+        resource,
+        second_org,
+        ownership_role_id,
+        is_primary=True,
+    )
+    db_session.add(current)
+    db_session.flush()
+
+    ownership_count = db_session.scalar(
+        select(func.count())
+        .select_from(ResourceOwnership)
+        .where(ResourceOwnership.resource_id == resource.id)
+    )
+    assert ownership_count == 2
+
+
 def test_resource_ownership_one_current_primary_per_role(db_session: Session) -> None:
     _seed_catalogs(db_session)
     tenant = _tenant(db_session, "tenant-a")
@@ -299,6 +335,32 @@ def test_resource_ownership_delete_is_restricted(db_session: Session) -> None:
 
     with pytest.raises(IntegrityError):
         db_session.execute(delete(Resource).where(Resource.id == resource.id))
+        db_session.flush()
+
+
+def test_organization_delete_is_restricted_while_ownership_exists(
+    db_session: Session,
+) -> None:
+    resource, organization, ownership_role_id = _ownership_refs(db_session)
+    db_session.add(_ownership(resource, organization, ownership_role_id))
+    db_session.flush()
+
+    with pytest.raises(IntegrityError):
+        db_session.execute(delete(Organization).where(Organization.id == organization.id))
+        db_session.flush()
+
+
+def test_ownership_role_delete_is_restricted_while_ownership_exists(
+    db_session: Session,
+) -> None:
+    resource, organization, ownership_role_id = _ownership_refs(db_session)
+    db_session.add(_ownership(resource, organization, ownership_role_id))
+    db_session.flush()
+
+    with pytest.raises(IntegrityError):
+        db_session.execute(
+            delete(OwnershipRole).where(OwnershipRole.id == ownership_role_id)
+        )
         db_session.flush()
 
 

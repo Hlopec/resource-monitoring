@@ -88,6 +88,12 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_index(
+        "ix_resource_ownership_tenant_resource_role",
+        "resource_ownership",
+        ["tenant_id", "resource_id", "ownership_role_id"],
+        unique=False,
+    )
+    op.create_index(
         "uq_resource_ownership_current",
         "resource_ownership",
         ["tenant_id", "resource_id", "organization_id", "ownership_role_id"],
@@ -106,6 +112,10 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("uq_resource_ownership_current_primary", table_name="resource_ownership")
     op.drop_index("uq_resource_ownership_current", table_name="resource_ownership")
+    op.drop_index(
+        "ix_resource_ownership_tenant_resource_role",
+        table_name="resource_ownership",
+    )
     op.drop_index("ix_resource_ownership_tenant_id_valid_to", table_name="resource_ownership")
     op.drop_index(
         "ix_resource_ownership_tenant_id_ownership_role_id",
