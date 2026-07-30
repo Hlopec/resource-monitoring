@@ -14,6 +14,7 @@ The database foundation introduces SQLAlchemy 2.x typed declarative models and A
 - `resource`
 - `resource_identifier`
 - `resource_ownership`
+- `resource_relationship`
 - `ownership_role`
 - `relationship_type`
 - `classification_type`
@@ -47,7 +48,7 @@ Use:
 - `make db-history`
 
 `make db-downgrade` returns the database to the Alembic base state.
-The resource identifier migration depends on revision `202607300001`; the resource ownership migration depends on revision `202607300002`.
+The resource identifier migration depends on revision `202607300001`; the resource ownership migration depends on revision `202607300002`; the resource relationship migration depends on revision `202607300003`.
 
 ## UUIDv7 and timestamps
 
@@ -90,6 +91,20 @@ Current ownership uniqueness is enforced by a tenant-first partial unique index 
 Current primary ownership uniqueness is enforced by a tenant-first partial unique index over `tenant_id`, `resource_id`, and `ownership_role_id` where `is_primary = true AND valid_to IS NULL`. This allows one current primary owner per resource and ownership role while allowing different roles to have different primary owners.
 
 Tenant-first indexes support common ownership lookups by resource, organization, ownership role, and current or historical validity state.
+
+## Resource relationships
+
+`resource_relationship` rows are tenant-owned temporal directed edges from `source_resource_id` to `target_resource_id`. Direction is part of identity: `A -> B` and `B -> A` are distinct facts, and endpoints are never sorted or normalized.
+
+The table uses tenant-aware composite foreign keys so `(tenant_id, source_resource_id)` and `(tenant_id, target_resource_id)` must each reference a resource in the same tenant. `relationship_type_id` references the global `relationship_type` catalog. Deletes of referenced resources and relationship types are restrictive.
+
+Direct self-reference is rejected with `source_resource_id <> target_resource_id`. Broader graph cycle detection is intentionally outside this database stage.
+
+A current relationship row has `valid_to IS NULL`; historical rows keep their validity window. Relationship changes follow an append-oriented policy: close the old row by setting `valid_to`, then insert a new row. The database enforces `valid_to > valid_from`, confidence score bounds, current-row uniqueness, source text validity, self-reference rejection, and restrictive foreign keys. Full mutation workflow policy remains application-level and no trigger-based immutable framework is added.
+
+Current relationship uniqueness is enforced by a tenant-first partial unique index over `tenant_id`, `source_resource_id`, `target_resource_id`, and `relationship_type_id` where `valid_to IS NULL`. Historical rows with `valid_to` set may reuse the same directed relationship tuple. Reverse direction and the same endpoints with a different relationship type remain valid separate facts.
+
+Tenant-first indexes support traversal and history queries by source resource, target resource, relationship type, source plus type, target plus type, and current or historical validity state.
 
 ## Organization hierarchy
 

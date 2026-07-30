@@ -151,15 +151,12 @@ erDiagram
         UUID id PK
         UUID tenant_id FK
         UUID source_resource_id FK
-        UUID relationship_type_id FK
         UUID target_resource_id FK
+        UUID relationship_type_id FK
         decimal confidence_score
-        timestamp first_seen_at
-        timestamp last_seen_at
         timestamp valid_from
         timestamp valid_to
-        UUID source_id
-        jsonb attributes
+        string source
         timestamp created_at
     }
 

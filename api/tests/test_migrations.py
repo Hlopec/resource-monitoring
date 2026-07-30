@@ -19,6 +19,7 @@ EXPECTED_TABLES = [
     "resource",
     "resource_identifier",
     "resource_ownership",
+    "resource_relationship",
     "resource_type",
     "tenant",
 ]
@@ -35,10 +36,11 @@ PREVIOUS_REVISION_TABLES = [
     "relationship_type",
     "resource",
     "resource_identifier",
+    "resource_ownership",
     "resource_type",
     "tenant",
 ]
-PREVIOUS_REVISION = "202607300002"
+PREVIOUS_REVISION = "202607300003"
 
 
 def test_upgrade_empty_database_to_head(alembic_config: Config) -> None:
@@ -166,6 +168,68 @@ def test_resource_ownership_indexes_are_tenant_first(
         assert "(tenant_id, resource_id, ownership_role_id)" in access_normalized
         assert "UNIQUE INDEX" not in access_normalized
         assert " WHERE " not in access_normalized
+    finally:
+        engine.dispose()
+        command.downgrade(alembic_config, "base")
+
+
+def test_resource_relationship_indexes_are_tenant_first(
+    alembic_config: Config,
+) -> None:
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(get_database_settings().sqlalchemy_url)
+    try:
+        with engine.connect() as connection:
+            index_defs = dict(
+                connection.execute(
+                    text(
+                        "SELECT c.relname, pg_get_indexdef(i.indexrelid) "
+                        "FROM pg_index i "
+                        "JOIN pg_class c ON c.oid = i.indexrelid "
+                        "WHERE i.indrelid = 'resource_relationship'::regclass"
+                    )
+                ).all()
+            )
+
+        current = " ".join(index_defs["uq_resource_relationship_current"].split())
+        assert "UNIQUE INDEX uq_resource_relationship_current" in current
+        assert (
+            "(tenant_id, source_resource_id, target_resource_id, relationship_type_id)"
+            in current
+        )
+        assert "WHERE (valid_to IS NULL)" in current
+
+        expected_non_unique = {
+            "ix_resource_relationship_tenant_id_source_resource_id": (
+                "tenant_id",
+                "source_resource_id",
+            ),
+            "ix_resource_relationship_tenant_id_target_resource_id": (
+                "tenant_id",
+                "target_resource_id",
+            ),
+            "ix_resource_relationship_tenant_id_relationship_type_id": (
+                "tenant_id",
+                "relationship_type_id",
+            ),
+            "ix_resource_relationship_tenant_source_type": (
+                "tenant_id",
+                "source_resource_id",
+                "relationship_type_id",
+            ),
+            "ix_resource_relationship_tenant_target_type": (
+                "tenant_id",
+                "target_resource_id",
+                "relationship_type_id",
+            ),
+            "ix_resource_relationship_tenant_id_valid_to": ("tenant_id", "valid_to"),
+        }
+        for index_name, columns in expected_non_unique.items():
+            indexdef = " ".join(index_defs[index_name].split())
+            assert f"CREATE INDEX {index_name}" in indexdef
+            assert f"({', '.join(columns)})" in indexdef
+            assert "UNIQUE INDEX" not in indexdef
+            assert " WHERE " not in indexdef
     finally:
         engine.dispose()
         command.downgrade(alembic_config, "base")
