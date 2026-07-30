@@ -121,3 +121,42 @@ class ClassificationValue(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
     classification_type: Mapped[ClassificationType] = relationship(
         back_populates="values"
     )
+
+
+class LifecycleStatus(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "lifecycle_status"
+    __table_args__ = (
+        CheckConstraint("code <> ''", name="code_not_empty"),
+        CheckConstraint("code = lower(code)", name="code_normalized"),
+    )
+
+    code: Mapped[str] = mapped_column(unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(nullable=False)
+    is_system: Mapped[bool] = mapped_column(nullable=False, default=True)
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
+
+
+class Criticality(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "criticality"
+    __table_args__ = (
+        CheckConstraint("code <> ''", name="code_not_empty"),
+        CheckConstraint("code = lower(code)", name="code_normalized"),
+    )
+
+    code: Mapped[str] = mapped_column(unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(nullable=False)
+    is_system: Mapped[bool] = mapped_column(nullable=False, default=True)
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
+
+
+class ExposureLevel(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "exposure_level"
+    __table_args__ = (
+        CheckConstraint("code <> ''", name="code_not_empty"),
+        CheckConstraint("code = lower(code)", name="code_normalized"),
+    )
+
+    code: Mapped[str] = mapped_column(unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(nullable=False)
+    is_system: Mapped[bool] = mapped_column(nullable=False, default=True)
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=True)

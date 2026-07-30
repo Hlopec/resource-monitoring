@@ -11,7 +11,10 @@ from sqlalchemy.orm import Session
 from app.models import (
     ClassificationType,
     ClassificationValue,
+    Criticality,
+    ExposureLevel,
     IdentifierType,
+    LifecycleStatus,
     OwnershipRole,
     RelationshipType,
     ResourceType,
@@ -105,6 +108,62 @@ BASELINE_CLASSIFICATION_VALUES = (
         "display_name": "Staging",
     },
 )
+BASELINE_LIFECYCLE_STATUSES = (
+    {
+        "id": UUID("01984000-0000-7000-8000-000000000701"),
+        "code": "active",
+        "display_name": "Active",
+    },
+    {
+        "id": UUID("01984000-0000-7000-8000-000000000702"),
+        "code": "inactive",
+        "display_name": "Inactive",
+    },
+    {
+        "id": UUID("01984000-0000-7000-8000-000000000703"),
+        "code": "archived",
+        "display_name": "Archived",
+    },
+)
+BASELINE_CRITICALITIES = (
+    {
+        "id": UUID("01984000-0000-7000-8000-000000000801"),
+        "code": "low",
+        "display_name": "Low",
+    },
+    {
+        "id": UUID("01984000-0000-7000-8000-000000000802"),
+        "code": "medium",
+        "display_name": "Medium",
+    },
+    {
+        "id": UUID("01984000-0000-7000-8000-000000000803"),
+        "code": "high",
+        "display_name": "High",
+    },
+    {
+        "id": UUID("01984000-0000-7000-8000-000000000804"),
+        "code": "critical",
+        "display_name": "Critical",
+    },
+)
+BASELINE_EXPOSURE_LEVELS = (
+    {
+        "id": UUID("01984000-0000-7000-8000-000000000901"),
+        "code": "internal",
+        "display_name": "Internal",
+    },
+    {
+        "id": UUID("01984000-0000-7000-8000-000000000902"),
+        "code": "restricted",
+        "display_name": "Restricted",
+    },
+    {
+        "id": UUID("01984000-0000-7000-8000-000000000903"),
+        "code": "public",
+        "display_name": "Public",
+    },
+)
 
 
 def _upsert_by_code(
@@ -166,6 +225,9 @@ def seed_catalogs(session: Session) -> CatalogSeedResult:
         _upsert_by_code(session, OwnershipRole, BASELINE_OWNERSHIP_ROLES),
         _upsert_by_code(session, RelationshipType, BASELINE_RELATIONSHIP_TYPES),
         _upsert_by_code(session, ClassificationType, BASELINE_CLASSIFICATION_TYPES),
+        _upsert_by_code(session, LifecycleStatus, BASELINE_LIFECYCLE_STATUSES),
+        _upsert_by_code(session, Criticality, BASELINE_CRITICALITIES),
+        _upsert_by_code(session, ExposureLevel, BASELINE_EXPOSURE_LEVELS),
     ):
         inserted += result.inserted
         existing += result.existing

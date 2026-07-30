@@ -8,6 +8,11 @@ The database foundation introduces SQLAlchemy 2.x typed declarative models and A
 - `organization`
 - `resource_type`
 - `identifier_type`
+- `lifecycle_status`
+- `criticality`
+- `exposure_level`
+- `resource`
+- `resource_identifier`
 - `ownership_role`
 - `relationship_type`
 - `classification_type`
@@ -41,6 +46,7 @@ Use:
 - `make db-history`
 
 `make db-downgrade` returns the database to the Alembic base state.
+The resource identifier migration depends on revision `202607300001`; downgrading one step returns the schema to the Issue #10 foundation revision.
 
 ## UUIDv7 and timestamps
 
@@ -49,6 +55,24 @@ The generator is protected by a process-local lock. If the 12-bit monotonic sequ
 
 Timestamp columns use PostgreSQL `TIMESTAMPTZ` via SQLAlchemy timezone-aware `DateTime`. Application defaults use UTC-aware datetimes for `created_at` and `updated_at`.
 All managed catalog models use the same timestamp policy.
+
+## Resource records
+
+`resource` stores the current canonical resource state. It has tenant-aware identity through `UNIQUE (tenant_id, id)` and restrictive foreign keys to `tenant`, `resource_type`, `lifecycle_status`, `criticality`, and `exposure_level`.
+
+`source_priority` is constrained to `0..1000`. Lower-level prioritization policy is deferred to ingestion or service code. `confidence_score` is constrained to `0.0000..1.0000`. `record_version` starts at `1` and is reserved for optimistic concurrency, but service-layer update logic is outside this stage.
+
+Resource archive behavior is logical. `archived_at` records archive state without hard deleting the row.
+
+## Resource identifiers
+
+`resource_identifier` rows are tenant-owned temporal immutable facts. They use a tenant-aware composite foreign key so `(tenant_id, resource_id)` must reference a resource in the same tenant. Resource deletes are restrictive and do not cascade into identifier history.
+
+Current identifier uniqueness is enforced by a PostgreSQL partial unique expression index over `tenant_id`, `identifier_type_id`, `COALESCE(namespace, '')`, and `normalized_value` where `valid_to IS NULL`. This defines null namespace semantics explicitly: `NULL` namespace is normalized to the empty namespace for uniqueness checks.
+
+Current primary identifier uniqueness is enforced by a partial unique index over `resource_id` and `identifier_type_id` where `is_primary = true AND valid_to IS NULL`. Historical primary identifiers with `valid_to` set remain preserved.
+
+`value_hash` is a lookup accelerator only. It is not collision-proof identity. Matching logic must perform a full `normalized_value` comparison after hash lookup, and distinct normalized values with the same hash are allowed.
 
 ## Organization hierarchy
 
@@ -62,6 +86,7 @@ Run:
 
 The seed inserts only a minimal baseline for managed reference catalogs. It is idempotent, deterministic by catalog `code`, and does not overwrite existing catalog rows.
 If a seeded system catalog `code` already exists with a different deterministic UUID, the seed exits with a clear conflict error instead of creating a duplicate or silently accepting the mismatch. Inserts use PostgreSQL conflict handling so concurrent seed runs do not create duplicate rows.
+Baseline seed data now includes lifecycle statuses (`active`, `inactive`, `archived`), criticalities (`low`, `medium`, `high`, `critical`), and exposure levels (`internal`, `restricted`, `public`).
 
 ## Tests
 
