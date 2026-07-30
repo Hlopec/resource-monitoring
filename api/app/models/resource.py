@@ -91,3 +91,25 @@ class Resource(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
         overlaps="organization,resource_ownerships",
         passive_deletes=True,
     )
+    outgoing_relationships: Mapped[list["ResourceRelationship"]] = relationship(
+        "ResourceRelationship",
+        primaryjoin=(
+            "and_(Resource.tenant_id == ResourceRelationship.tenant_id, "
+            "Resource.id == ResourceRelationship.source_resource_id)"
+        ),
+        foreign_keys="[ResourceRelationship.tenant_id, ResourceRelationship.source_resource_id]",
+        back_populates="source_resource",
+        overlaps="incoming_relationships,target_resource",
+        passive_deletes=True,
+    )
+    incoming_relationships: Mapped[list["ResourceRelationship"]] = relationship(
+        "ResourceRelationship",
+        primaryjoin=(
+            "and_(Resource.tenant_id == ResourceRelationship.tenant_id, "
+            "Resource.id == ResourceRelationship.target_resource_id)"
+        ),
+        foreign_keys="[ResourceRelationship.tenant_id, ResourceRelationship.target_resource_id]",
+        back_populates="target_resource",
+        overlaps="outgoing_relationships,source_resource",
+        passive_deletes=True,
+    )

@@ -52,7 +52,11 @@ The implemented ownership table enforces tenant-safe composite foreign keys to b
 
 ### Relationship type and resource relationship
 
-Resource relationships capture directed associations such as dependency, containment, or parent-child links. Each relationship is temporally versioned and may be superseded over time.
+Relationship types remain global managed catalog values. Resource relationships capture directed associations such as dependency, containment, or parent-child links. Each relationship is temporally versioned and may be superseded over time.
+
+The implemented relationship table stores directed edges from `source_resource_id` to `target_resource_id`; `A -> B` and `B -> A` are different facts and endpoints are never sorted. Tenant-safe composite foreign keys require both source and target resources to belong to the row tenant. Direct self-reference is rejected, but broader graph cycle detection is outside this stage.
+
+A current relationship row has `valid_to IS NULL`; changing an endpoint, relationship type, confidence score, or source should close the old row and insert a new temporal fact. Current uniqueness is scoped to `tenant_id`, `source_resource_id`, `target_resource_id`, and `relationship_type_id`, while historical reuse remains allowed. Referenced resources and relationship types use restrictive deletes.
 
 ### Classification type, classification value, and resource classification
 
