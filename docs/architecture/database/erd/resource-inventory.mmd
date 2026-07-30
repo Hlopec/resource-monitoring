@@ -127,10 +127,10 @@ erDiagram
         UUID organization_id FK
         UUID ownership_role_id FK
         boolean is_primary
+        decimal confidence_score
         timestamp valid_from
         timestamp valid_to
-        UUID source_id
-        decimal confidence_score
+        string source
         timestamp created_at
     }
 

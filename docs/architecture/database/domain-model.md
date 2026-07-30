@@ -46,7 +46,9 @@ Current identifier uniqueness is scoped to `tenant_id`, `identifier_type_id`, na
 
 ### Ownership role and resource ownership
 
-Ownership roles describe the purpose of an ownership relationship. Resource ownership stores the association between a resource and an organization with a validity window, a source, and a confidence score. Ownership is not modeled as a mutable current-state record in the same way as a simple flag; it is a temporally versioned assignment fact.
+Ownership roles describe the purpose of an ownership relationship and remain global managed catalog values. Resource ownership stores the association between a resource and an organization with a validity window, an optional source, a primary marker, and a confidence score. Ownership is not modeled as a mutable current-state record in the same way as a simple flag; it is a temporally versioned assignment fact.
+
+The implemented ownership table enforces tenant-safe composite foreign keys to both `resource` and `organization`. A current row has `valid_to IS NULL`; changing ownership closes the old row with `valid_to` and inserts a new row. Current ownership uniqueness is scoped to `tenant_id`, `resource_id`, `organization_id`, and `ownership_role_id`, while current primary ownership is limited to one row per `tenant_id`, `resource_id`, and `ownership_role_id`. Referenced resources, organizations, and ownership roles use restrictive deletes so historical ownership evidence is not removed implicitly.
 
 ### Relationship type and resource relationship
 

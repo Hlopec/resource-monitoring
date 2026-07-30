@@ -68,3 +68,8 @@ class Organization(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
         overlaps="organizations,parent,tenant",
         passive_deletes=True,
     )
+    resource_ownerships: Mapped[list["ResourceOwnership"]] = relationship(
+        back_populates="organization",
+        overlaps="ownerships,resource",
+        passive_deletes=True,
+    )

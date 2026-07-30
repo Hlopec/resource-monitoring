@@ -13,6 +13,7 @@ The database foundation introduces SQLAlchemy 2.x typed declarative models and A
 - `exposure_level`
 - `resource`
 - `resource_identifier`
+- `resource_ownership`
 - `ownership_role`
 - `relationship_type`
 - `classification_type`
@@ -46,7 +47,7 @@ Use:
 - `make db-history`
 
 `make db-downgrade` returns the database to the Alembic base state.
-The resource identifier migration depends on revision `202607300001`; downgrading one step returns the schema to the Issue #10 foundation revision.
+The resource identifier migration depends on revision `202607300001`; the resource ownership migration depends on revision `202607300002`.
 
 ## UUIDv7 and timestamps
 
@@ -77,6 +78,18 @@ Current primary identifier uniqueness is enforced by a tenant-first partial uniq
 `resource_identifier` is modeled as a temporal fact, not as a mutable current-state row. Changing identity fields on an existing row is not the recommended operation. The intended application-level policy is to close the old row by setting `valid_to` and insert a new row with the replacement identity evidence. At this stage the database enforces the validity window, current-row uniqueness, and restrictive foreign keys; it does not add a trigger-based immutable framework.
 
 The table intentionally has `created_at` without `updated_at` because identifier rows are append-oriented temporal facts. Subsequent corrections should be represented by new temporal rows instead of in-place identity mutation.
+
+## Resource ownership
+
+`resource_ownership` rows are tenant-owned temporal ownership facts linking a resource, an organization, and a global `ownership_role`. They use tenant-aware composite foreign keys so `(tenant_id, resource_id)` must reference a resource in the same tenant and `(tenant_id, organization_id)` must reference an organization in the same tenant. Deletes of referenced resources, organizations, and ownership roles are restrictive.
+
+A current ownership row has `valid_to IS NULL`; historical rows keep their validity window. Ownership changes follow an append-oriented policy: close the old row by setting `valid_to`, then insert a new ownership row. The database enforces `valid_to > valid_from`, confidence score bounds, current-row uniqueness, primary-owner uniqueness, source text validity, and restrictive foreign keys. Full workflow policy remains application-level.
+
+Current ownership uniqueness is enforced by a tenant-first partial unique index over `tenant_id`, `resource_id`, `organization_id`, and `ownership_role_id` where `valid_to IS NULL`. Historical rows with `valid_to` set may reuse the same ownership tuple.
+
+Current primary ownership uniqueness is enforced by a tenant-first partial unique index over `tenant_id`, `resource_id`, and `ownership_role_id` where `is_primary = true AND valid_to IS NULL`. This allows one current primary owner per resource and ownership role while allowing different roles to have different primary owners.
+
+Tenant-first indexes support common ownership lookups by resource, organization, ownership role, and current or historical validity state.
 
 ## Organization hierarchy
 
