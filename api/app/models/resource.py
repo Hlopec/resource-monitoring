@@ -86,3 +86,8 @@ class Resource(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
         back_populates="resource",
         passive_deletes=True,
     )
+    ownerships: Mapped[list["ResourceOwnership"]] = relationship(
+        back_populates="resource",
+        overlaps="organization,resource_ownerships",
+        passive_deletes=True,
+    )
