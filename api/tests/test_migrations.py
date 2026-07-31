@@ -12,6 +12,7 @@ EXPECTED_TABLES = [
     "criticality",
     "exposure_level",
     "identifier_type",
+    "label",
     "lifecycle_status",
     "organization",
     "ownership_role",
@@ -19,6 +20,7 @@ EXPECTED_TABLES = [
     "resource",
     "resource_classification",
     "resource_identifier",
+    "resource_label",
     "resource_ownership",
     "resource_relationship",
     "resource_type",
@@ -36,13 +38,15 @@ PREVIOUS_REVISION_TABLES = [
     "ownership_role",
     "relationship_type",
     "resource",
+    "resource_classification",
     "resource_identifier",
     "resource_ownership",
     "resource_relationship",
     "resource_type",
     "tenant",
 ]
-PREVIOUS_REVISION = "202607300004"
+PREVIOUS_REVISION = "202607300005"
+CLASSIFICATION_PREVIOUS_REVISION = "202607300004"
 
 
 def test_upgrade_empty_database_to_head(alembic_config: Config) -> None:
@@ -362,7 +366,7 @@ def test_resource_classification_adjacent_downgrade_removes_supporting_constrain
     alembic_config: Config,
 ) -> None:
     command.upgrade(alembic_config, "head")
-    command.downgrade(alembic_config, PREVIOUS_REVISION)
+    command.downgrade(alembic_config, CLASSIFICATION_PREVIOUS_REVISION)
     engine = create_engine(get_database_settings().sqlalchemy_url)
     try:
         with engine.connect() as connection:
@@ -378,6 +382,174 @@ def test_resource_classification_adjacent_downgrade_removes_supporting_constrain
             ).scalar_one()
         assert resource_classification_table is None
         assert supporting_constraint == 0
+    finally:
+        engine.dispose()
+        command.downgrade(alembic_config, "base")
+
+
+def test_label_constraints_and_indexes(alembic_config: Config) -> None:
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(get_database_settings().sqlalchemy_url)
+    try:
+        with engine.connect() as connection:
+            constraints = dict(
+                connection.execute(
+                    text(
+                        "SELECT conname, pg_get_constraintdef(oid) "
+                        "FROM pg_constraint "
+                        "WHERE conrelid = 'label'::regclass"
+                    )
+                ).all()
+            )
+            index_defs = dict(
+                connection.execute(
+                    text(
+                        "SELECT c.relname, pg_get_indexdef(i.indexrelid) "
+                        "FROM pg_index i "
+                        "JOIN pg_class c ON c.oid = i.indexrelid "
+                        "WHERE i.indrelid = 'label'::regclass"
+                    )
+                ).all()
+            )
+
+        assert constraints["pk_label"] == "PRIMARY KEY (id)"
+        assert (
+            constraints["fk_label_tenant_id_tenant"]
+            == "FOREIGN KEY (tenant_id) REFERENCES tenant(id) ON DELETE RESTRICT"
+        )
+        assert constraints["uq_label_tenant_id_id"] == "UNIQUE (tenant_id, id)"
+        assert (
+            constraints["uq_label_tenant_id_key_value"]
+            == "UNIQUE (tenant_id, key, value)"
+        )
+        assert constraints["ck_label_key_not_empty"] == "CHECK ((btrim((key)::text) <> ''::text))"
+        assert constraints["ck_label_key_lowercase"] == "CHECK (((key)::text = lower((key)::text)))"
+        assert constraints["ck_label_key_trimmed"] == "CHECK (((key)::text = btrim((key)::text)))"
+        assert (
+            constraints["ck_label_value_not_empty"]
+            == "CHECK ((btrim((value)::text) <> ''::text))"
+        )
+        assert (
+            constraints["ck_label_value_trimmed"]
+            == "CHECK (((value)::text = btrim((value)::text)))"
+        )
+        assert (
+            constraints["ck_label_display_name_not_empty"]
+            == "CHECK (((display_name IS NULL) OR "
+            "(btrim((display_name)::text) <> ''::text)))"
+        )
+        assert (
+            constraints["ck_label_description_not_empty"]
+            == "CHECK (((description IS NULL) OR "
+            "(btrim((description)::text) <> ''::text)))"
+        )
+        assert (
+            constraints["ck_label_color_not_empty"]
+            == "CHECK (((color IS NULL) OR (btrim((color)::text) <> ''::text)))"
+        )
+        assert (
+            constraints["ck_label_color_hex_format"]
+            == "CHECK (((color IS NULL) OR "
+            "((color)::text ~ '^#[0-9A-Fa-f]{6}$'::text)))"
+        )
+
+        active_index = " ".join(index_defs["ix_label_tenant_id_is_active"].split())
+        assert "CREATE INDEX ix_label_tenant_id_is_active" in active_index
+        assert "(tenant_id, is_active)" in active_index
+        assert "UNIQUE INDEX" not in active_index
+        assert " WHERE " not in active_index
+    finally:
+        engine.dispose()
+        command.downgrade(alembic_config, "base")
+
+
+def test_resource_label_constraints_and_indexes(alembic_config: Config) -> None:
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(get_database_settings().sqlalchemy_url)
+    try:
+        with engine.connect() as connection:
+            constraints = dict(
+                connection.execute(
+                    text(
+                        "SELECT conname, pg_get_constraintdef(oid) "
+                        "FROM pg_constraint "
+                        "WHERE conrelid = 'resource_label'::regclass"
+                    )
+                ).all()
+            )
+            index_defs = dict(
+                connection.execute(
+                    text(
+                        "SELECT c.relname, pg_get_indexdef(i.indexrelid) "
+                        "FROM pg_index i "
+                        "JOIN pg_class c ON c.oid = i.indexrelid "
+                        "WHERE i.indrelid = 'resource_label'::regclass"
+                    )
+                ).all()
+            )
+
+        assert constraints["pk_resource_label"] == "PRIMARY KEY (id)"
+        assert (
+            constraints["fk_resource_label_resource_id_resource"]
+            == "FOREIGN KEY (tenant_id, resource_id) "
+            "REFERENCES resource(tenant_id, id) ON DELETE RESTRICT"
+        )
+        assert (
+            constraints["fk_resource_label_label_id_label"]
+            == "FOREIGN KEY (tenant_id, label_id) "
+            "REFERENCES label(tenant_id, id) ON DELETE RESTRICT"
+        )
+        assert (
+            constraints["ck_resource_label_valid_time_order"]
+            == "CHECK (((valid_to IS NULL) OR (valid_to > valid_from)))"
+        )
+        assert (
+            constraints["ck_resource_label_source_not_empty"]
+            == "CHECK (((source IS NULL) OR (btrim((source)::text) <> ''::text)))"
+        )
+
+        current = " ".join(index_defs["uq_resource_label_current"].split())
+        assert "UNIQUE INDEX uq_resource_label_current" in current
+        assert "(tenant_id, resource_id, label_id)" in current
+        assert "WHERE (valid_to IS NULL)" in current
+
+        expected_non_unique = {
+            "ix_resource_label_tenant_resource_label": (
+                "tenant_id",
+                "resource_id",
+                "label_id",
+            ),
+            "ix_resource_label_tenant_label_id": ("tenant_id", "label_id"),
+            "ix_resource_label_tenant_valid_to": ("tenant_id", "valid_to"),
+        }
+        for index_name, columns in expected_non_unique.items():
+            indexdef = " ".join(index_defs[index_name].split())
+            assert f"CREATE INDEX {index_name}" in indexdef
+            assert f"({', '.join(columns)})" in indexdef
+            assert "UNIQUE INDEX" not in indexdef
+            assert " WHERE " not in indexdef
+    finally:
+        engine.dispose()
+        command.downgrade(alembic_config, "base")
+
+
+def test_resource_labels_adjacent_downgrade_removes_label_tables(
+    alembic_config: Config,
+) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, PREVIOUS_REVISION)
+    engine = create_engine(get_database_settings().sqlalchemy_url)
+    try:
+        with engine.connect() as connection:
+            label_table = connection.execute(
+                text("SELECT to_regclass('public.label')")
+            ).scalar_one()
+            resource_label_table = connection.execute(
+                text("SELECT to_regclass('public.resource_label')")
+            ).scalar_one()
+        assert label_table is None
+        assert resource_label_table is None
+        assert list_user_tables(engine) == PREVIOUS_REVISION_TABLES
     finally:
         engine.dispose()
         command.downgrade(alembic_config, "base")

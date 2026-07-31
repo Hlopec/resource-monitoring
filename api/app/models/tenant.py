@@ -21,3 +21,7 @@ class Tenant(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
         overlaps="children,parent",
         passive_deletes=True,
     )
+    labels: Mapped[list["Label"]] = relationship(
+        back_populates="tenant",
+        passive_deletes=True,
+    )

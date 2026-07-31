@@ -117,3 +117,8 @@ class Resource(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
         back_populates="resource",
         passive_deletes=True,
     )
+    label_assignments: Mapped[list["ResourceLabel"]] = relationship(
+        back_populates="resource",
+        overlaps="label,resource_assignments",
+        passive_deletes=True,
+    )

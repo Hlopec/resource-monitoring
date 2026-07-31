@@ -68,7 +68,11 @@ A current classification row has `valid_to IS NULL`; historical rows keep their 
 
 ### Label and resource label
 
-Labels provide lightweight annotations without changing canonical identity. Resource label attachments remain temporal facts so that labels can be removed or superseded without losing audit context.
+Labels provide tenant-scoped, free-form operational annotations without changing canonical identity. They differ from controlled classifications: classifications use global managed catalogs and type/value governance, while labels are tenant-owned key/value definitions for local workflow, grouping, and annotation.
+
+The implemented `label` table is tenant-owned and uses canonical `key` plus case-sensitive `value`. Label keys must be trimmed, lowercase, and non-empty. Label values must be trimmed and non-empty, but value case is preserved so `Production` and `production` are different values. A tenant can define each canonical `(key, value)` only once, regardless of `is_active`; deactivation preserves the definition for existing assignments instead of allowing duplicate recreation. Optional `display_name`, `description`, and `color` metadata do not participate in identity. Color is optional and, when present, must use `#RRGGBB` hex format.
+
+`resource_label` stores tenant-owned temporal assignment facts between a resource and a label. It uses tenant-safe composite foreign keys to both `resource(tenant_id, id)` and `label(tenant_id, id)`, so PostgreSQL rejects cross-tenant resource/label assignments. A current assignment row has `valid_to IS NULL`; historical rows keep their validity window. Duplicate current assignment of the same label to the same resource is rejected, while historical reuse, multiple labels on one resource, the same label on different resources, and multiple values for the same key are allowed. Referenced tenants, resources, and labels use restrictive deletes.
 
 ### Resource state history
 
