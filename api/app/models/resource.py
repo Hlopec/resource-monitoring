@@ -126,3 +126,30 @@ class Resource(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
         back_populates="resource",
         passive_deletes=True,
     )
+    aliases: Mapped[list["ResourceAlias"]] = relationship(
+        back_populates="resource",
+        passive_deletes=True,
+    )
+    outgoing_merge: Mapped[Optional["ResourceMerge"]] = relationship(
+        "ResourceMerge",
+        primaryjoin=(
+            "and_(Resource.tenant_id == ResourceMerge.tenant_id, "
+            "Resource.id == ResourceMerge.source_resource_id)"
+        ),
+        foreign_keys="[ResourceMerge.tenant_id, ResourceMerge.source_resource_id]",
+        back_populates="source_resource",
+        overlaps="incoming_merges,target_resource",
+        passive_deletes=True,
+        uselist=False,
+    )
+    incoming_merges: Mapped[list["ResourceMerge"]] = relationship(
+        "ResourceMerge",
+        primaryjoin=(
+            "and_(Resource.tenant_id == ResourceMerge.tenant_id, "
+            "Resource.id == ResourceMerge.target_resource_id)"
+        ),
+        foreign_keys="[ResourceMerge.tenant_id, ResourceMerge.target_resource_id]",
+        back_populates="target_resource",
+        overlaps="outgoing_merge,source_resource",
+        passive_deletes=True,
+    )

@@ -112,6 +112,20 @@ erDiagram
         timestamp created_at
     }
 
+    resource_alias {
+        UUID id PK
+        UUID tenant_id FK
+        UUID resource_id FK
+        string alias_type
+        string alias_value
+        string normalized_value
+        string source
+        timestamp first_seen_at
+        timestamp last_seen_at
+        timestamp created_at
+        timestamp updated_at
+    }
+
     ownership_role {
         UUID id PK
         string code
@@ -235,11 +249,10 @@ erDiagram
         UUID tenant_id FK
         UUID source_resource_id FK
         UUID target_resource_id FK
-        string merge_reason
-        string merge_strategy
-        UUID initiated_by
+        string reason
+        string source
         timestamp merged_at
-        jsonb metadata
+        timestamp created_at
     }
 
     domain_resource {
@@ -294,6 +307,7 @@ erDiagram
     tenant ||--o{ organization : contains
     tenant ||--o{ resource : owns
     tenant ||--o{ resource_identifier : owns
+    tenant ||--o{ resource_alias : owns
     tenant ||--o{ resource_ownership : owns
     tenant ||--o{ resource_relationship : owns
     tenant ||--o{ resource_classification : owns
@@ -312,6 +326,7 @@ erDiagram
     exposure_level ||--o{ resource : defines
 
     resource ||--o{ resource_identifier : has
+    resource ||--o{ resource_alias : has
     resource ||--o{ resource_ownership : has
     resource ||--o{ resource_relationship : source
     resource ||--o{ resource_relationship : target

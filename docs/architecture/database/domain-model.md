@@ -10,7 +10,7 @@ The core model owns:
 
 - tenant and organization hierarchy;
 - resource types and the abstract resource entity;
-- resource identifiers and deterministic identity evidence;
+- resource identifiers, aliases, and deterministic identity evidence;
 - ownership and relationship facts;
 - classifications, labels, resource state history, and merge evidence.
 
@@ -43,6 +43,14 @@ The resource table does not carry `valid_from` and `valid_to` because those are 
 Resource identifier stores a specific identifier value for a resource, using an identifier type and a normalized representation. Each assignment remains temporally versioned so that the identity evidence can be audited and superseded when required.
 
 Current identifier uniqueness is scoped to `tenant_id`, `identifier_type_id`, namespace, and `normalized_value`, with `NULL` namespace treated as the empty namespace for uniqueness. `value_hash` is only a lookup accelerator; identity matching still requires full `normalized_value` comparison after hash lookup, and hash collisions must not conflict when normalized values differ.
+
+### Resource alias
+
+`resource_alias` stores tenant-owned alternate names or lookup keys that point to a resource but are not canonical deterministic identifiers. Aliases preserve historical lookup names such as old hostnames, display names, imported external aliases, or source-system naming artifacts. They differ from `resource_identifier`: identifiers are typed identity evidence used by matching policy, while aliases are operational lookup history and must not replace identifier matching rules.
+
+The table uses a tenant-aware composite foreign key from `(tenant_id, resource_id)` to `resource(tenant_id, id)`, so PostgreSQL rejects cross-tenant alias rows. Within one tenant, `UNIQUE (tenant_id, alias_type, normalized_value)` ensures one alias lookup key resolves to exactly one resource. The same alias key can exist in different tenants, and the same normalized value can exist under different alias types.
+
+Alias normalization is deliberately not implemented in model events, database triggers, or migrations. Future callers must supply `normalized_value` explicitly. The database enforces non-empty `alias_type`, `alias_value`, and `normalized_value`, optional non-empty `source`, and `last_seen_at >= first_seen_at`. Resource deletes are restrictive while aliases reference the resource.
 
 ### Ownership role and resource ownership
 
@@ -86,7 +94,39 @@ Tenant-first indexes support resource history/current lookup by `(tenant_id, res
 
 ### Resource merge
 
-Resource merge stores the evidence and policy outcome of the consolidation of two resources into one canonical resource. It is designed for auditability, review, rollback, and policy enforcement.
+`resource_merge` stores immutable directed merge lineage from `source_resource_id` to `target_resource_id`. A row means `source_resource_id -> target_resource_id`: the source resource remains stored in `resource`, and no destructive consolidation or row rewriting happens in this database foundation stage.
+
+Merge lineage is separate from `resource_relationship`. Relationships model domain graph facts such as dependency or containment; merge lineage models canonical-resource resolution after deduplication. A resource may have only one outgoing merge edge within a tenant through `UNIQUE (tenant_id, source_resource_id)`, while a target resource may have multiple incoming edges, allowing `A -> C` and `B -> C`. Canonical resolution remains derived from the merge graph and is not stored on `resource`; columns such as `canonical_resource_id`, `merged_into_resource_id`, `is_canonical`, or `is_merged` are intentionally absent.
+
+Tenant isolation is enforced with composite foreign keys from `(tenant_id, source_resource_id)` and `(tenant_id, target_resource_id)` to `resource(tenant_id, id)`. The database rejects self-merges, empty `reason`, empty `source`, cross-tenant endpoints, duplicate outgoing edges, and direct or indirect cycles through the `prevent_resource_merge_cycle()` trigger function and `trg_resource_merge_prevent_cycle` trigger. The trigger traverses outgoing merge edges within the same tenant before insert and before endpoint updates. Opposing concurrent inserts can still require future service-layer serialization or advisory locking; that concurrency policy is deliberately outside this issue.
+
+Canonical resource resolution can be derived with a tenant-scoped recursive CTE:
+
+```sql
+WITH RECURSIVE lineage(resource_id, path, depth) AS (
+    SELECT
+        :resource_id::uuid,
+        ARRAY[:resource_id::uuid],
+        0
+    UNION ALL
+    SELECT
+        resource_merge.target_resource_id,
+        lineage.path || resource_merge.target_resource_id,
+        lineage.depth + 1
+    FROM resource_merge
+    JOIN lineage
+      ON resource_merge.tenant_id = :tenant_id::uuid
+     AND resource_merge.source_resource_id = lineage.resource_id
+    WHERE resource_merge.target_resource_id <> ALL(lineage.path)
+      AND lineage.depth < 100
+)
+SELECT resource_id
+FROM lineage
+ORDER BY depth DESC
+LIMIT 1;
+```
+
+When no outgoing merge exists, the CTE returns the input resource. For a valid chain such as `A -> B -> C`, it returns `C`. Future service-layer canonicalization can wrap this query and define serialization, conflict handling, alias transfer policy, and user workflow. This schema does not automatically move aliases, rewrite identifiers, transfer relationships, delete source resources, or resolve alias conflicts.
 
 ## Type-specific extension entities
 
@@ -214,6 +254,7 @@ The domain uses a hybrid model with:
 
 - a canonical resource row for durable logical identity;
 - identifier rows for deterministic matching;
+- alias rows for operational lookup history;
 - relationship and ownership rows for graph semantics and history;
 - classification and label rows for controlled extension.
 
