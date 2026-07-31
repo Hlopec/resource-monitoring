@@ -18,6 +18,7 @@ The database foundation introduces SQLAlchemy 2.x typed declarative models and A
 - `resource_classification`
 - `label`
 - `resource_label`
+- `resource_state`
 - `ownership_role`
 - `relationship_type`
 - `classification_type`
@@ -51,7 +52,7 @@ Use:
 - `make db-history`
 
 `make db-downgrade` returns the database to the Alembic base state.
-The resource identifier migration depends on revision `202607300001`; the resource ownership migration depends on revision `202607300002`; the resource relationship migration depends on revision `202607300003`; the resource classification migration depends on revision `202607300004`; the resource labels migration depends on revision `202607300005`.
+The resource identifier migration depends on revision `202607300001`; the resource ownership migration depends on revision `202607300002`; the resource relationship migration depends on revision `202607300003`; the resource classification migration depends on revision `202607300004`; the resource labels migration depends on revision `202607300005`; the resource state migration depends on revision `202607300006`.
 
 ## UUIDv7 and timestamps
 
@@ -63,11 +64,31 @@ All managed catalog models use the same timestamp policy.
 
 ## Resource records
 
-`resource` stores the current canonical resource state. It has tenant-aware identity through `UNIQUE (tenant_id, id)` and restrictive foreign keys to `tenant`, `resource_type`, `lifecycle_status`, `criticality`, and `exposure_level`.
+`resource` stores the current canonical resource state snapshot. It has tenant-aware identity through `UNIQUE (tenant_id, id)` and restrictive foreign keys to `tenant`, `resource_type`, `lifecycle_status`, `criticality`, and `exposure_level`.
 
 `source_priority` is constrained to `0..1000`. Lower-level prioritization policy is deferred to ingestion or service code. `confidence_score` is constrained to `0.0000..1.0000`. `record_version` starts at `1` and is reserved for optimistic concurrency, but service-layer update logic is outside this stage.
 
 Resource archive behavior is logical. `archived_at` records archive state without hard deleting the row.
+
+## Resource state history
+
+`resource_state` stores tenant-owned temporal history for the snapshot state fields kept on `resource`: `lifecycle_status_id`, `criticality_id`, `exposure_level_id`, `source_priority`, and `confidence_score`. The resource snapshot remains the fast current read model; `resource_state` is the auditable history model.
+
+The table uses a tenant-aware composite foreign key so `(tenant_id, resource_id)` references `resource(tenant_id, id)`. Reference catalog fields point to the global `lifecycle_status`, `criticality`, and `exposure_level` catalogs. Deletes of referenced resources and catalog rows are restrictive so state history is not removed implicitly.
+
+A current state row has `valid_to IS NULL`; historical rows keep their validity window. The database enforces exactly one current state per resource with a tenant-first partial unique index over `tenant_id` and `resource_id` where `valid_to IS NULL`. State changes follow an append-oriented policy: close the old current row with `valid_to`, insert the new state row, and update the `resource` snapshot in the application or service layer. This stage intentionally does not add triggers or service workflow code.
+
+The migration backfills one current `resource_state` row for each existing `resource` using the current resource snapshot values. `first_seen_at` becomes deterministic `valid_from`, `valid_to` is `NULL`, and `source` is `migration_backfill`. Downgrade removes `resource_state` without modifying the resource snapshot fields.
+
+Additional database checks require non-negative `source_priority`, `confidence_score` in `0.0000..1.0000`, `valid_to > valid_from` when `valid_to` is present, and non-empty source text using `btrim(source)` when `source` is not null.
+
+Indexes are scoped to observed query patterns without duplicating leftmost-prefix coverage:
+
+- `ix_resource_state_tenant_resource_valid_from` supports tenant/resource history and current lookup ordered by effective time.
+- `ix_resource_state_tenant_lifecycle_status` supports tenant-local lifecycle status filtering.
+- `ix_resource_state_tenant_criticality` supports tenant-local criticality filtering.
+- `ix_resource_state_tenant_exposure_level` supports tenant-local exposure filtering.
+- `ix_resource_state_tenant_valid_to` supports current and historical validity-window scans.
 
 ## Resource identifiers
 

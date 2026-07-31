@@ -215,19 +215,19 @@ erDiagram
         timestamp created_at
     }
 
-    resource_state_history {
+    resource_state {
         UUID id PK
         UUID tenant_id FK
         UUID resource_id FK
         UUID lifecycle_status_id FK
         UUID criticality_id FK
         UUID exposure_level_id FK
+        int source_priority
         decimal confidence_score
-        timestamp changed_at
-        string changed_by_type
-        UUID changed_by_id
-        string reason_code
-        UUID source_event_id
+        timestamp valid_from
+        timestamp valid_to
+        string source
+        timestamp created_at
     }
 
     resource_merge {
@@ -299,7 +299,7 @@ erDiagram
     tenant ||--o{ resource_classification : owns
     tenant ||--o{ label : defines
     tenant ||--o{ resource_label : owns
-    tenant ||--o{ resource_state_history : owns
+    tenant ||--o{ resource_state : owns
     tenant ||--o{ resource_merge : owns
 
     organization ||--o{ resource_ownership : is_owned_by
@@ -317,7 +317,7 @@ erDiagram
     resource ||--o{ resource_relationship : target
     resource ||--o{ resource_classification : has
     resource ||--o{ resource_label : has
-    resource ||--o{ resource_state_history : transitions
+    resource ||--o{ resource_state : records
     resource ||--o{ resource_merge : merged_from
     resource ||--o{ resource_merge : merged_to
     resource ||--o| domain_resource : extends
@@ -333,8 +333,8 @@ erDiagram
     classification_type ||--o{ classification_value : contains
     classification_type ||--o{ resource_classification : scopes
     classification_value ||--o{ resource_classification : assigned_as
-    lifecycle_status ||--o{ resource_state_history : records
-    criticality ||--o{ resource_state_history : records
-    exposure_level ||--o{ resource_state_history : records
+    lifecycle_status ||--o{ resource_state : records
+    criticality ||--o{ resource_state : records
+    exposure_level ||--o{ resource_state : records
     label ||--o{ resource_label : assigned_as
     ip_resource ||--o{ network_service_resource : serves

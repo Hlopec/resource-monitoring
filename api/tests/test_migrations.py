@@ -1,8 +1,21 @@
+from datetime import UTC, datetime
+from decimal import Decimal
+
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
 
 from app.db.settings import get_database_settings
+from app.db.seed.catalogs import seed_catalogs
+from app.models import (
+    Criticality,
+    ExposureLevel,
+    LifecycleStatus,
+    Resource,
+    ResourceType,
+    Tenant,
+)
 from tests.conftest import list_user_tables
 
 EXPECTED_TABLES = [
@@ -23,6 +36,7 @@ EXPECTED_TABLES = [
     "resource_label",
     "resource_ownership",
     "resource_relationship",
+    "resource_state",
     "resource_type",
     "tenant",
 ]
@@ -33,6 +47,7 @@ PREVIOUS_REVISION_TABLES = [
     "criticality",
     "exposure_level",
     "identifier_type",
+    "label",
     "lifecycle_status",
     "organization",
     "ownership_role",
@@ -40,12 +55,14 @@ PREVIOUS_REVISION_TABLES = [
     "resource",
     "resource_classification",
     "resource_identifier",
+    "resource_label",
     "resource_ownership",
     "resource_relationship",
     "resource_type",
     "tenant",
 ]
-PREVIOUS_REVISION = "202607300005"
+PREVIOUS_REVISION = "202607300006"
+LABEL_PREVIOUS_REVISION = "202607300005"
 CLASSIFICATION_PREVIOUS_REVISION = "202607300004"
 
 
@@ -537,7 +554,7 @@ def test_resource_labels_adjacent_downgrade_removes_label_tables(
     alembic_config: Config,
 ) -> None:
     command.upgrade(alembic_config, "head")
-    command.downgrade(alembic_config, PREVIOUS_REVISION)
+    command.downgrade(alembic_config, LABEL_PREVIOUS_REVISION)
     engine = create_engine(get_database_settings().sqlalchemy_url)
     try:
         with engine.connect() as connection:
@@ -549,7 +566,226 @@ def test_resource_labels_adjacent_downgrade_removes_label_tables(
             ).scalar_one()
         assert label_table is None
         assert resource_label_table is None
+        assert "label" not in list_user_tables(engine)
+        assert "resource_label" not in list_user_tables(engine)
+    finally:
+        engine.dispose()
+        command.downgrade(alembic_config, "base")
+
+
+def test_resource_state_constraints_and_indexes(alembic_config: Config) -> None:
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(get_database_settings().sqlalchemy_url)
+    try:
+        with engine.connect() as connection:
+            constraints = dict(
+                connection.execute(
+                    text(
+                        "SELECT conname, pg_get_constraintdef(oid) "
+                        "FROM pg_constraint "
+                        "WHERE conrelid = 'resource_state'::regclass"
+                    )
+                ).all()
+            )
+            index_defs = dict(
+                connection.execute(
+                    text(
+                        "SELECT c.relname, pg_get_indexdef(i.indexrelid) "
+                        "FROM pg_index i "
+                        "JOIN pg_class c ON c.oid = i.indexrelid "
+                        "WHERE i.indrelid = 'resource_state'::regclass"
+                    )
+                ).all()
+            )
+
+        assert constraints["pk_resource_state"] == "PRIMARY KEY (id)"
+        assert (
+            constraints["fk_resource_state_resource_id_resource"]
+            == "FOREIGN KEY (tenant_id, resource_id) "
+            "REFERENCES resource(tenant_id, id) ON DELETE RESTRICT"
+        )
+        assert (
+            constraints["fk_resource_state_lifecycle_status"]
+            == "FOREIGN KEY (lifecycle_status_id) "
+            "REFERENCES lifecycle_status(id) ON DELETE RESTRICT"
+        )
+        assert (
+            constraints["fk_resource_state_criticality"]
+            == "FOREIGN KEY (criticality_id) "
+            "REFERENCES criticality(id) ON DELETE RESTRICT"
+        )
+        assert (
+            constraints["fk_resource_state_exposure_level"]
+            == "FOREIGN KEY (exposure_level_id) "
+            "REFERENCES exposure_level(id) ON DELETE RESTRICT"
+        )
+        assert (
+            constraints["ck_resource_state_source_priority_non_negative"]
+            == "CHECK ((source_priority >= 0))"
+        )
+        assert (
+            constraints["ck_resource_state_confidence_score_range"]
+            == "CHECK (((confidence_score >= 0.0000) AND "
+            "(confidence_score <= 1.0000)))"
+        )
+        assert (
+            constraints["ck_resource_state_valid_time_order"]
+            == "CHECK (((valid_to IS NULL) OR (valid_to > valid_from)))"
+        )
+        assert (
+            constraints["ck_resource_state_source_not_empty"]
+            == "CHECK (((source IS NULL) OR (btrim(source) <> ''::text)))"
+        )
+
+        current = " ".join(index_defs["uq_resource_state_current"].split())
+        assert "UNIQUE INDEX uq_resource_state_current" in current
+        assert "(tenant_id, resource_id)" in current
+        assert "WHERE (valid_to IS NULL)" in current
+
+        expected_non_unique = {
+            "ix_resource_state_tenant_resource_valid_from": (
+                "tenant_id",
+                "resource_id",
+                "valid_from",
+            ),
+            "ix_resource_state_tenant_lifecycle_status": (
+                "tenant_id",
+                "lifecycle_status_id",
+            ),
+            "ix_resource_state_tenant_criticality": ("tenant_id", "criticality_id"),
+            "ix_resource_state_tenant_exposure_level": (
+                "tenant_id",
+                "exposure_level_id",
+            ),
+            "ix_resource_state_tenant_valid_to": ("tenant_id", "valid_to"),
+        }
+        for index_name, columns in expected_non_unique.items():
+            indexdef = " ".join(index_defs[index_name].split())
+            assert f"CREATE INDEX {index_name}" in indexdef
+            assert f"({', '.join(columns)})" in indexdef
+            assert "UNIQUE INDEX" not in indexdef
+            assert " WHERE " not in indexdef
+    finally:
+        engine.dispose()
+        command.downgrade(alembic_config, "base")
+
+
+def test_resource_state_adjacent_downgrade_removes_table(
+    alembic_config: Config,
+) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, PREVIOUS_REVISION)
+    engine = create_engine(get_database_settings().sqlalchemy_url)
+    try:
+        with engine.connect() as connection:
+            resource_state_table = connection.execute(
+                text("SELECT to_regclass('public.resource_state')")
+            ).scalar_one()
+        assert resource_state_table is None
         assert list_user_tables(engine) == PREVIOUS_REVISION_TABLES
+    finally:
+        engine.dispose()
+        command.downgrade(alembic_config, "base")
+
+
+def test_resource_state_backfills_existing_resources(
+    alembic_config: Config,
+) -> None:
+    command.upgrade(alembic_config, PREVIOUS_REVISION)
+    engine = create_engine(get_database_settings().sqlalchemy_url)
+    tenant_id = None
+    resource_id = None
+    lifecycle_status_id = None
+    criticality_id = None
+    exposure_level_id = None
+    first_seen_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    created_at = datetime(2026, 1, 2, 3, 4, 6, tzinfo=UTC)
+    try:
+        with Session(engine) as session:
+            seed_catalogs(session)
+            tenant = Tenant(slug="tenant-a", display_name="Tenant A", status="active")
+            session.add(tenant)
+            session.flush()
+            resource_type_id = session.scalar(
+                text("SELECT id FROM resource_type WHERE code = 'domain'")
+            )
+            lifecycle_status_id = session.scalar(
+                text("SELECT id FROM lifecycle_status WHERE code = 'active'")
+            )
+            criticality_id = session.scalar(
+                text("SELECT id FROM criticality WHERE code = 'high'")
+            )
+            exposure_level_id = session.scalar(
+                text("SELECT id FROM exposure_level WHERE code = 'public'")
+            )
+            assert resource_type_id is not None
+            assert lifecycle_status_id is not None
+            assert criticality_id is not None
+            assert exposure_level_id is not None
+            resource = Resource(
+                tenant_id=tenant.id,
+                resource_type_id=resource_type_id,
+                canonical_name="backfill.example.com",
+                display_name="backfill.example.com",
+                lifecycle_status_id=lifecycle_status_id,
+                criticality_id=criticality_id,
+                exposure_level_id=exposure_level_id,
+                source_priority=321,
+                confidence_score=Decimal("0.8765"),
+                first_seen_at=first_seen_at,
+                last_seen_at=first_seen_at,
+                created_at=created_at,
+                updated_at=created_at,
+            )
+            session.add(resource)
+            session.commit()
+            tenant_id = tenant.id
+            resource_id = resource.id
+
+        command.upgrade(alembic_config, "head")
+        with engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT tenant_id, resource_id, lifecycle_status_id, "
+                    "criticality_id, exposure_level_id, source_priority, "
+                    "confidence_score, valid_from, valid_to, source, created_at "
+                    "FROM resource_state"
+                )
+            ).mappings().one()
+
+        assert row["tenant_id"] == tenant_id
+        assert row["resource_id"] == resource_id
+        assert row["lifecycle_status_id"] == lifecycle_status_id
+        assert row["criticality_id"] == criticality_id
+        assert row["exposure_level_id"] == exposure_level_id
+        assert row["source_priority"] == 321
+        assert row["confidence_score"] == Decimal("0.8765")
+        assert row["valid_from"] == first_seen_at
+        assert row["valid_to"] is None
+        assert row["source"] == "migration_backfill"
+        assert row["created_at"] == created_at
+
+        command.downgrade(alembic_config, PREVIOUS_REVISION)
+        with engine.connect() as connection:
+            resource_row = connection.execute(
+                text(
+                    "SELECT lifecycle_status_id, criticality_id, exposure_level_id, "
+                    "source_priority, confidence_score, first_seen_at, last_seen_at "
+                    "FROM resource WHERE id = :resource_id"
+                ),
+                {"resource_id": resource_id},
+            ).mappings().one()
+            resource_state_table = connection.execute(
+                text("SELECT to_regclass('public.resource_state')")
+            ).scalar_one()
+        assert resource_state_table is None
+        assert resource_row["lifecycle_status_id"] == lifecycle_status_id
+        assert resource_row["criticality_id"] == criticality_id
+        assert resource_row["exposure_level_id"] == exposure_level_id
+        assert resource_row["source_priority"] == 321
+        assert resource_row["confidence_score"] == Decimal("0.8765")
+        assert resource_row["first_seen_at"] == first_seen_at
+        assert resource_row["last_seen_at"] == first_seen_at
     finally:
         engine.dispose()
         command.downgrade(alembic_config, "base")

@@ -12,7 +12,7 @@ The core model owns:
 - resource types and the abstract resource entity;
 - resource identifiers and deterministic identity evidence;
 - ownership and relationship facts;
-- classifications, labels, state history, and merge evidence.
+- classifications, labels, resource state history, and merge evidence.
 
 The model does not treat downstream observations, technology detections, finding events, audit events, outbox events, or vulnerability records as part of the core Resource Inventory ERD. Those domains may be modeled later as separate bounded contexts that reference Resource Inventory as a shared dependency.
 
@@ -32,11 +32,11 @@ Resource types define a stable taxonomy for the domain and support future inheri
 
 ### Resource
 
-Resource is the canonical logical record. It stores the current state of the resource, including lifecycle status, criticality, exposure level, identity confidence, and temporal observation markers. The entity includes a `record_version` field for optimistic concurrency control.
+Resource is the canonical logical record. It stores the current mutable snapshot of the resource, including lifecycle status, criticality, exposure level, source priority, confidence score, and temporal observation markers. The entity includes a `record_version` field for optimistic concurrency control.
 
 The resource table does not carry `valid_from` and `valid_to` because those are represented by versioned relationships, ownership assignments, identifiers, and state-history rows rather than by the core resource row itself. The logical reference fields `lifecycle_status_id`, `criticality_id`, and `exposure_level_id` are modeled as foreign keys to managed reference catalogs, even though those catalog entities may be detailed later during the implementation stage.
 
-`source_priority` is constrained to the range `0..1000`, `confidence_score` is constrained to `0.0000..1.0000`, and `record_version` must remain greater than zero. Resource archive behavior is logical through `archived_at`.
+`source_priority` is constrained to the range `0..1000`, `confidence_score` is constrained to `0.0000..1.0000`, and `record_version` must remain greater than zero. Resource archive behavior is logical through `archived_at`. The snapshot fields on `resource` are intentionally retained for fast current-state reads; `resource_state` records the temporal history for those same state dimensions.
 
 ### Resource identifier
 
@@ -74,9 +74,15 @@ The implemented `label` table is tenant-owned and uses canonical `key` plus case
 
 `resource_label` stores tenant-owned temporal assignment facts between a resource and a label. It uses tenant-safe composite foreign keys to both `resource(tenant_id, id)` and `label(tenant_id, id)`, so PostgreSQL rejects cross-tenant resource/label assignments. A current assignment row has `valid_to IS NULL`; historical rows keep their validity window. Duplicate current assignment of the same label to the same resource is rejected, while historical reuse, multiple labels on one resource, the same label on different resources, and multiple values for the same key are allowed. Referenced tenants, resources, and labels use restrictive deletes.
 
-### Resource state history
+### Resource state
 
-Resource state history is immutable append-only evidence of lifecycle transitions. It stores the state, confidence, reason, and source event that caused the transition. Its `lifecycle_status_id`, `criticality_id`, and `exposure_level_id` fields are logical foreign keys to the same managed reference catalogs used by `resource`.
+`resource_state` is tenant-owned temporal history for resource lifecycle status, criticality, exposure level, source priority, and confidence score. A current row has `valid_to IS NULL`; historical rows retain their validity window. Exactly one current state row is allowed per `tenant_id` and `resource_id` through a PostgreSQL partial unique index.
+
+The table uses a tenant-aware composite foreign key from `(tenant_id, resource_id)` to `resource(tenant_id, id)`, so PostgreSQL rejects cross-tenant state rows. `lifecycle_status_id`, `criticality_id`, and `exposure_level_id` are restrictive foreign keys to global managed reference catalogs. Referenced resources and catalog rows are not deleted implicitly while state history exists.
+
+Resource state changes follow the same append-oriented policy as other temporal facts: close the previous current row by setting `valid_to`, insert a new row with the replacement state, and keep the resource snapshot synchronized in the application or service layer. This PR deliberately does not add triggers or service workflow code. Migration `202607300007` backfills one current state row for each existing resource using the resource snapshot values, `first_seen_at` as deterministic `valid_from`, `valid_to = NULL`, and `source = 'migration_backfill'`.
+
+Tenant-first indexes support resource history/current lookup by `(tenant_id, resource_id, valid_from)`, catalog-based filtering by lifecycle status, criticality, and exposure level, and validity-window scans by `(tenant_id, valid_to)`. The database also enforces non-negative `source_priority`, confidence bounds, `valid_to > valid_from`, and non-empty source text when source is present.
 
 ### Resource merge
 
@@ -174,7 +180,7 @@ The recommended PostgreSQL enforcement strategy is to use tenant-aware composite
 - `resource_relationship` should use two tenant-aware composite foreign keys:
   - `FOREIGN KEY (tenant_id, source_resource_id) REFERENCES resource (tenant_id, id)`
   - `FOREIGN KEY (tenant_id, target_resource_id) REFERENCES resource (tenant_id, id)`
-- The same pattern should be applied to identifiers, ownership rows, classifications, labels, and merge records.
+- The same pattern should be applied to identifiers, ownership rows, classifications, labels, state rows, and merge records.
 
 Application-level validation may duplicate these checks, but it should not replace database enforcement because the database is the last line of defense for consistency.
 
@@ -225,4 +231,4 @@ The model separates logical validity from record metadata:
 
 - `valid_from` / `valid_to` express logical validity;
 - `created_at` / `updated_at` express record lifecycle;
-- `changed_at` expresses state-transition application time.
+- `resource_state.valid_from` expresses logical state-transition effective time.

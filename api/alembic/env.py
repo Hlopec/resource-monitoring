@@ -14,6 +14,7 @@ from app.models import (  # noqa: F401
     resource_identifier,
     resource_ownership,
     resource_relationship,
+    resource_state,
     tenant,
 )
 
