@@ -31,9 +31,11 @@ EXPECTED_TABLES = [
     "ownership_role",
     "relationship_type",
     "resource",
+    "resource_alias",
     "resource_classification",
     "resource_identifier",
     "resource_label",
+    "resource_merge",
     "resource_ownership",
     "resource_relationship",
     "resource_state",
@@ -58,10 +60,17 @@ PREVIOUS_REVISION_TABLES = [
     "resource_label",
     "resource_ownership",
     "resource_relationship",
+    "resource_state",
     "resource_type",
     "tenant",
 ]
-PREVIOUS_REVISION = "202607300006"
+RESOURCE_STATE_PREVIOUS_REVISION_TABLES = [
+    table_name
+    for table_name in PREVIOUS_REVISION_TABLES
+    if table_name != "resource_state"
+]
+PREVIOUS_REVISION = "202607300007"
+RESOURCE_STATE_PREVIOUS_REVISION = "202607300006"
 LABEL_PREVIOUS_REVISION = "202607300005"
 CLASSIFICATION_PREVIOUS_REVISION = "202607300004"
 
@@ -674,7 +683,7 @@ def test_resource_state_adjacent_downgrade_removes_table(
     alembic_config: Config,
 ) -> None:
     command.upgrade(alembic_config, "head")
-    command.downgrade(alembic_config, PREVIOUS_REVISION)
+    command.downgrade(alembic_config, RESOURCE_STATE_PREVIOUS_REVISION)
     engine = create_engine(get_database_settings().sqlalchemy_url)
     try:
         with engine.connect() as connection:
@@ -682,7 +691,7 @@ def test_resource_state_adjacent_downgrade_removes_table(
                 text("SELECT to_regclass('public.resource_state')")
             ).scalar_one()
         assert resource_state_table is None
-        assert list_user_tables(engine) == PREVIOUS_REVISION_TABLES
+        assert list_user_tables(engine) == RESOURCE_STATE_PREVIOUS_REVISION_TABLES
     finally:
         engine.dispose()
         command.downgrade(alembic_config, "base")
@@ -691,7 +700,7 @@ def test_resource_state_adjacent_downgrade_removes_table(
 def test_resource_state_backfills_existing_resources(
     alembic_config: Config,
 ) -> None:
-    command.upgrade(alembic_config, PREVIOUS_REVISION)
+    command.upgrade(alembic_config, RESOURCE_STATE_PREVIOUS_REVISION)
     engine = create_engine(get_database_settings().sqlalchemy_url)
     tenant_id = None
     resource_id = None
@@ -765,7 +774,7 @@ def test_resource_state_backfills_existing_resources(
         assert row["source"] == "migration_backfill"
         assert row["created_at"] == created_at
 
-        command.downgrade(alembic_config, PREVIOUS_REVISION)
+        command.downgrade(alembic_config, RESOURCE_STATE_PREVIOUS_REVISION)
         with engine.connect() as connection:
             resource_row = connection.execute(
                 text(
@@ -788,4 +797,285 @@ def test_resource_state_backfills_existing_resources(
         assert resource_row["last_seen_at"] == first_seen_at
     finally:
         engine.dispose()
+        command.downgrade(alembic_config, "base")
+
+
+def test_resource_alias_columns_constraints_and_indexes(
+    alembic_config: Config,
+) -> None:
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(get_database_settings().sqlalchemy_url)
+    try:
+        with engine.connect() as connection:
+            columns = {
+                row["column_name"]: row
+                for row in connection.execute(
+                    text(
+                        "SELECT column_name, data_type, is_nullable "
+                        "FROM information_schema.columns "
+                        "WHERE table_schema = 'public' "
+                        "AND table_name = 'resource_alias'"
+                    )
+                ).mappings()
+            }
+            constraints = dict(
+                connection.execute(
+                    text(
+                        "SELECT conname, pg_get_constraintdef(oid) "
+                        "FROM pg_constraint "
+                        "WHERE conrelid = 'resource_alias'::regclass"
+                    )
+                ).all()
+            )
+            index_defs = dict(
+                connection.execute(
+                    text(
+                        "SELECT c.relname, pg_get_indexdef(i.indexrelid) "
+                        "FROM pg_index i "
+                        "JOIN pg_class c ON c.oid = i.indexrelid "
+                        "WHERE i.indrelid = 'resource_alias'::regclass"
+                    )
+                ).all()
+            )
+
+        expected_columns = {
+            "id": ("uuid", "NO"),
+            "tenant_id": ("uuid", "NO"),
+            "resource_id": ("uuid", "NO"),
+            "alias_type": ("character varying", "NO"),
+            "alias_value": ("character varying", "NO"),
+            "normalized_value": ("character varying", "NO"),
+            "source": ("text", "YES"),
+            "first_seen_at": ("timestamp with time zone", "NO"),
+            "last_seen_at": ("timestamp with time zone", "NO"),
+            "created_at": ("timestamp with time zone", "NO"),
+            "updated_at": ("timestamp with time zone", "NO"),
+        }
+        for column_name, (data_type, nullable) in expected_columns.items():
+            assert columns[column_name]["data_type"] == data_type
+            assert columns[column_name]["is_nullable"] == nullable
+
+        assert constraints["pk_resource_alias"] == "PRIMARY KEY (id)"
+        assert (
+            constraints["fk_resource_alias_resource_id_resource"]
+            == "FOREIGN KEY (tenant_id, resource_id) "
+            "REFERENCES resource(tenant_id, id) ON DELETE RESTRICT"
+        )
+        assert (
+            constraints["uq_resource_alias_tenant_alias_type_normalized_value"]
+            == "UNIQUE (tenant_id, alias_type, normalized_value)"
+        )
+        assert (
+            constraints["ck_resource_alias_alias_type_not_empty"]
+            == "CHECK ((btrim((alias_type)::text) <> ''::text))"
+        )
+        assert (
+            constraints["ck_resource_alias_alias_value_not_empty"]
+            == "CHECK ((btrim((alias_value)::text) <> ''::text))"
+        )
+        assert (
+            constraints["ck_resource_alias_normalized_value_not_empty"]
+            == "CHECK ((btrim((normalized_value)::text) <> ''::text))"
+        )
+        assert (
+            constraints["ck_resource_alias_source_not_empty"]
+            == "CHECK (((source IS NULL) OR (btrim(source) <> ''::text)))"
+        )
+        assert (
+            constraints["ck_resource_alias_seen_at_order"]
+            == "CHECK ((last_seen_at >= first_seen_at))"
+        )
+
+        expected_non_unique = {
+            "ix_resource_alias_tenant_resource_id": ("tenant_id", "resource_id"),
+            "ix_resource_alias_tenant_alias_type": ("tenant_id", "alias_type"),
+            "ix_resource_alias_tenant_last_seen_at": ("tenant_id", "last_seen_at"),
+        }
+        for index_name, columns_tuple in expected_non_unique.items():
+            indexdef = " ".join(index_defs[index_name].split())
+            assert f"CREATE INDEX {index_name}" in indexdef
+            assert f"({', '.join(columns_tuple)})" in indexdef
+            assert "UNIQUE INDEX" not in indexdef
+            assert " WHERE " not in indexdef
+    finally:
+        engine.dispose()
+        command.downgrade(alembic_config, "base")
+
+
+def test_resource_merge_columns_constraints_indexes_and_trigger(
+    alembic_config: Config,
+) -> None:
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(get_database_settings().sqlalchemy_url)
+    try:
+        with engine.connect() as connection:
+            columns = {
+                row["column_name"]: row
+                for row in connection.execute(
+                    text(
+                        "SELECT column_name, data_type, is_nullable "
+                        "FROM information_schema.columns "
+                        "WHERE table_schema = 'public' "
+                        "AND table_name = 'resource_merge'"
+                    )
+                ).mappings()
+            }
+            constraints = dict(
+                connection.execute(
+                    text(
+                        "SELECT conname, pg_get_constraintdef(oid) "
+                        "FROM pg_constraint "
+                        "WHERE conrelid = 'resource_merge'::regclass"
+                    )
+                ).all()
+            )
+            index_defs = dict(
+                connection.execute(
+                    text(
+                        "SELECT c.relname, pg_get_indexdef(i.indexrelid) "
+                        "FROM pg_index i "
+                        "JOIN pg_class c ON c.oid = i.indexrelid "
+                        "WHERE i.indrelid = 'resource_merge'::regclass"
+                    )
+                ).all()
+            )
+            trigger_def = connection.execute(
+                text(
+                    "SELECT pg_get_triggerdef(oid) "
+                    "FROM pg_trigger "
+                    "WHERE tgrelid = 'resource_merge'::regclass "
+                    "AND tgname = 'trg_resource_merge_prevent_cycle'"
+                )
+            ).scalar_one()
+            function_exists = connection.execute(
+                text(
+                    "SELECT count(*) FROM pg_proc "
+                    "WHERE proname = 'prevent_resource_merge_cycle'"
+                )
+            ).scalar_one()
+
+        expected_columns = {
+            "id": ("uuid", "NO"),
+            "tenant_id": ("uuid", "NO"),
+            "source_resource_id": ("uuid", "NO"),
+            "target_resource_id": ("uuid", "NO"),
+            "reason": ("text", "YES"),
+            "source": ("text", "YES"),
+            "merged_at": ("timestamp with time zone", "NO"),
+            "created_at": ("timestamp with time zone", "NO"),
+        }
+        for column_name, (data_type, nullable) in expected_columns.items():
+            assert columns[column_name]["data_type"] == data_type
+            assert columns[column_name]["is_nullable"] == nullable
+
+        assert constraints["pk_resource_merge"] == "PRIMARY KEY (id)"
+        assert (
+            constraints["fk_resource_merge_source_resource_id_resource"]
+            == "FOREIGN KEY (tenant_id, source_resource_id) "
+            "REFERENCES resource(tenant_id, id) ON DELETE RESTRICT"
+        )
+        assert (
+            constraints["fk_resource_merge_target_resource_id_resource"]
+            == "FOREIGN KEY (tenant_id, target_resource_id) "
+            "REFERENCES resource(tenant_id, id) ON DELETE RESTRICT"
+        )
+        assert (
+            constraints["uq_resource_merge_tenant_source_resource_id"]
+            == "UNIQUE (tenant_id, source_resource_id)"
+        )
+        assert (
+            constraints["ck_resource_merge_source_resource_not_target_resource"]
+            == "CHECK ((source_resource_id <> target_resource_id))"
+        )
+        assert (
+            constraints["ck_resource_merge_reason_not_empty"]
+            == "CHECK (((reason IS NULL) OR (btrim(reason) <> ''::text)))"
+        )
+        assert (
+            constraints["ck_resource_merge_source_not_empty"]
+            == "CHECK (((source IS NULL) OR (btrim(source) <> ''::text)))"
+        )
+
+        target_history = " ".join(
+            index_defs["ix_resource_merge_tenant_target_merged_at"].split()
+        )
+        assert "CREATE INDEX ix_resource_merge_tenant_target_merged_at" in target_history
+        assert "(tenant_id, target_resource_id, merged_at)" in target_history
+        assert "UNIQUE INDEX" not in target_history
+        assert " WHERE " not in target_history
+
+        merged_at = " ".join(index_defs["ix_resource_merge_tenant_merged_at"].split())
+        assert "CREATE INDEX ix_resource_merge_tenant_merged_at" in merged_at
+        assert "(tenant_id, merged_at)" in merged_at
+        assert "UNIQUE INDEX" not in merged_at
+        assert " WHERE " not in merged_at
+        assert "ix_resource_merge_tenant_target_resource_id" not in index_defs
+
+        normalized_trigger = " ".join(trigger_def.split())
+        assert function_exists == 1
+        assert "TRIGGER trg_resource_merge_prevent_cycle" in normalized_trigger
+        assert (
+            "BEFORE INSERT OR UPDATE OF tenant_id, "
+            "source_resource_id, target_resource_id"
+        ) in normalized_trigger
+        assert "ON public.resource_merge" in normalized_trigger
+        assert "EXECUTE FUNCTION prevent_resource_merge_cycle()" in normalized_trigger
+    finally:
+        engine.dispose()
+        command.downgrade(alembic_config, "base")
+
+
+def test_resource_merge_alias_adjacent_downgrade_removes_tables_and_trigger(
+    alembic_config: Config,
+) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, PREVIOUS_REVISION)
+    engine = create_engine(get_database_settings().sqlalchemy_url)
+    try:
+        with engine.connect() as connection:
+            resource_alias_table = connection.execute(
+                text("SELECT to_regclass('public.resource_alias')")
+            ).scalar_one()
+            resource_merge_table = connection.execute(
+                text("SELECT to_regclass('public.resource_merge')")
+            ).scalar_one()
+            trigger_count = connection.execute(
+                text(
+                    "SELECT count(*) FROM pg_trigger "
+                    "WHERE tgname = 'trg_resource_merge_prevent_cycle'"
+                )
+            ).scalar_one()
+            function_count = connection.execute(
+                text(
+                    "SELECT count(*) FROM pg_proc "
+                    "WHERE proname = 'prevent_resource_merge_cycle'"
+                )
+            ).scalar_one()
+        assert resource_alias_table is None
+        assert resource_merge_table is None
+        assert trigger_count == 0
+        assert function_count == 0
+        assert list_user_tables(engine) == PREVIOUS_REVISION_TABLES
+    finally:
+        engine.dispose()
+        command.downgrade(alembic_config, "base")
+
+
+def test_upgrade_downgrade_upgrade_cycle_succeeds(alembic_config: Config) -> None:
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, PREVIOUS_REVISION)
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(get_database_settings().sqlalchemy_url)
+    try:
+        assert list_user_tables(engine) == EXPECTED_TABLES
+    finally:
+        engine.dispose()
+        command.downgrade(alembic_config, "base")
+
+
+def test_alembic_check_has_no_pending_operations(alembic_config: Config) -> None:
+    command.upgrade(alembic_config, "head")
+    try:
+        command.check(alembic_config)
+    finally:
         command.downgrade(alembic_config, "base")

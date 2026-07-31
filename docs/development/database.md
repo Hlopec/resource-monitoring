@@ -13,12 +13,14 @@ The database foundation introduces SQLAlchemy 2.x typed declarative models and A
 - `exposure_level`
 - `resource`
 - `resource_identifier`
+- `resource_alias`
 - `resource_ownership`
 - `resource_relationship`
 - `resource_classification`
 - `label`
 - `resource_label`
 - `resource_state`
+- `resource_merge`
 - `ownership_role`
 - `relationship_type`
 - `classification_type`
@@ -52,7 +54,7 @@ Use:
 - `make db-history`
 
 `make db-downgrade` returns the database to the Alembic base state.
-The resource identifier migration depends on revision `202607300001`; the resource ownership migration depends on revision `202607300002`; the resource relationship migration depends on revision `202607300003`; the resource classification migration depends on revision `202607300004`; the resource labels migration depends on revision `202607300005`; the resource state migration depends on revision `202607300006`.
+The resource identifier migration depends on revision `202607300001`; the resource ownership migration depends on revision `202607300002`; the resource relationship migration depends on revision `202607300003`; the resource classification migration depends on revision `202607300004`; the resource labels migration depends on revision `202607300005`; the resource state migration depends on revision `202607300006`; the resource merge and alias migration depends on revision `202607300007`.
 
 ## UUIDv7 and timestamps
 
@@ -103,6 +105,63 @@ Current primary identifier uniqueness is enforced by a tenant-first partial uniq
 `resource_identifier` is modeled as a temporal fact, not as a mutable current-state row. Changing identity fields on an existing row is not the recommended operation. The intended application-level policy is to close the old row by setting `valid_to` and insert a new row with the replacement identity evidence. At this stage the database enforces the validity window, current-row uniqueness, and restrictive foreign keys; it does not add a trigger-based immutable framework.
 
 The table intentionally has `created_at` without `updated_at` because identifier rows are append-oriented temporal facts. Subsequent corrections should be represented by new temporal rows instead of in-place identity mutation.
+
+## Resource aliases
+
+`resource_alias` rows are tenant-owned lookup history for alternate resource names. They are not identifier evidence and do not participate in deterministic matching policy. Future callers must provide both the original `alias_value` and a precomputed `normalized_value`; the database does not normalize aliases through validators, triggers, or migration code.
+
+Tenant isolation is enforced through the composite foreign key `(tenant_id, resource_id)` to `resource(tenant_id, id)`. Deletes of referenced resources are restrictive. Within a tenant, `UNIQUE (tenant_id, alias_type, normalized_value)` guarantees one alias lookup key resolves to exactly one resource. The same alias key may exist in a different tenant, and the same normalized value may be reused under a different alias type.
+
+The database enforces non-empty `alias_type`, `alias_value`, and `normalized_value`, optional non-empty `source`, and `last_seen_at >= first_seen_at`.
+
+Indexes are scoped to lookup and audit patterns:
+
+- `UNIQUE (tenant_id, alias_type, normalized_value)` supports exact tenant-local alias resolution.
+- `ix_resource_alias_tenant_resource_id` supports listing aliases for a resource.
+- `ix_resource_alias_tenant_alias_type` supports tenant/type filtering.
+- `ix_resource_alias_tenant_last_seen_at` supports recency scans.
+
+## Resource merges
+
+`resource_merge` stores immutable tenant-owned merge lineage from `source_resource_id` to `target_resource_id`. The source resource remains stored in `resource`; no resource rows or existing resource-related rows are deleted, rewritten, or consolidated by this migration. Merge lineage is not represented as `resource_relationship`, because relationships are general graph facts while merges define canonical-resource resolution.
+
+Tenant isolation is enforced with composite foreign keys from `(tenant_id, source_resource_id)` and `(tenant_id, target_resource_id)` to `resource(tenant_id, id)`. A source resource can have one outgoing merge edge through `UNIQUE (tenant_id, source_resource_id)`. A target may have multiple incoming edges, allowing separate resources to merge into the same canonical target.
+
+The database rejects self-merges with `source_resource_id <> target_resource_id` and rejects empty `reason` or `source` when those fields are present. The `prevent_resource_merge_cycle()` trigger function and `trg_resource_merge_prevent_cycle` trigger prevent direct and indirect cycles before insert and before endpoint updates. The trigger traversal is scoped to `tenant_id`, follows outgoing merge edges from the proposed target, uses a visited path plus depth limit, and raises a clear PostgreSQL exception when the proposed source is encountered.
+
+Canonical resolution remains derived rather than materialized on `resource`. A tenant-scoped recursive CTE can resolve a chain such as `A -> B -> C` to `C` while returning the input resource when it has no outgoing merge:
+
+```sql
+WITH RECURSIVE lineage(resource_id, path, depth) AS (
+    SELECT
+        :resource_id::uuid,
+        ARRAY[:resource_id::uuid],
+        0
+    UNION ALL
+    SELECT
+        resource_merge.target_resource_id,
+        lineage.path || resource_merge.target_resource_id,
+        lineage.depth + 1
+    FROM resource_merge
+    JOIN lineage
+      ON resource_merge.tenant_id = :tenant_id::uuid
+     AND resource_merge.source_resource_id = lineage.resource_id
+    WHERE resource_merge.target_resource_id <> ALL(lineage.path)
+      AND lineage.depth < 100
+)
+SELECT resource_id
+FROM lineage
+ORDER BY depth DESC
+LIMIT 1;
+```
+
+Future service-layer work owns canonicalization workflow, merge authorization, conflict resolution, alias transfer policy, and concurrency serialization. Opposing concurrent inserts may require advisory locking or another serialization strategy later; advisory locks are intentionally not part of this database-only issue.
+
+Indexes are scoped to documented query patterns:
+
+- `UNIQUE (tenant_id, source_resource_id)` supports deterministic outgoing-edge lookup.
+- `ix_resource_merge_tenant_target_merged_at` supports incoming merge lookup and incoming merge history by target. A shorter `(tenant_id, target_resource_id)` index is intentionally omitted because this longer index covers that leftmost-prefix access pattern.
+- `ix_resource_merge_tenant_merged_at` supports tenant-local merge timeline scans.
 
 ## Resource ownership
 
