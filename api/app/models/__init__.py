@@ -16,6 +16,7 @@ from app.models.resource_classification import ResourceClassification
 from app.models.resource_identifier import ResourceIdentifier
 from app.models.resource_ownership import ResourceOwnership
 from app.models.resource_relationship import ResourceRelationship
+from app.models.resource_state import ResourceState
 from app.models.tenant import Tenant
 
 __all__ = [
@@ -35,6 +36,7 @@ __all__ = [
     "ResourceLabel",
     "ResourceOwnership",
     "ResourceRelationship",
+    "ResourceState",
     "ResourceType",
     "Tenant",
 ]
