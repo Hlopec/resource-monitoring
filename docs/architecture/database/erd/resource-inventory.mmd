@@ -194,10 +194,14 @@ erDiagram
     label {
         UUID id PK
         UUID tenant_id FK
-        string code
+        string key
+        string value
         string display_name
-        boolean is_system
+        string description
+        string color
         boolean is_active
+        timestamp created_at
+        timestamp updated_at
     }
 
     resource_label {
@@ -207,6 +211,7 @@ erDiagram
         UUID label_id FK
         timestamp valid_from
         timestamp valid_to
+        string source
         timestamp created_at
     }
 

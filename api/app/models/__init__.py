@@ -9,6 +9,7 @@ from app.models.catalogs import (
     RelationshipType,
     ResourceType,
 )
+from app.models.label import Label, ResourceLabel
 from app.models.organization import Organization
 from app.models.resource import Resource
 from app.models.resource_classification import ResourceClassification
@@ -24,12 +25,14 @@ __all__ = [
     "ExposureLevel",
     "IdentifierType",
     "LifecycleStatus",
+    "Label",
     "Organization",
     "OwnershipRole",
     "RelationshipType",
     "Resource",
     "ResourceClassification",
     "ResourceIdentifier",
+    "ResourceLabel",
     "ResourceOwnership",
     "ResourceRelationship",
     "ResourceType",

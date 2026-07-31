@@ -7,6 +7,7 @@ from app.db.base import Base
 from app.db.settings import get_database_settings
 from app.models import (  # noqa: F401
     catalogs,
+    label,
     organization,
     resource,
     resource_classification,

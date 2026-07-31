@@ -16,6 +16,8 @@ The database foundation introduces SQLAlchemy 2.x typed declarative models and A
 - `resource_ownership`
 - `resource_relationship`
 - `resource_classification`
+- `label`
+- `resource_label`
 - `ownership_role`
 - `relationship_type`
 - `classification_type`
@@ -49,7 +51,7 @@ Use:
 - `make db-history`
 
 `make db-downgrade` returns the database to the Alembic base state.
-The resource identifier migration depends on revision `202607300001`; the resource ownership migration depends on revision `202607300002`; the resource relationship migration depends on revision `202607300003`; the resource classification migration depends on revision `202607300004`.
+The resource identifier migration depends on revision `202607300001`; the resource ownership migration depends on revision `202607300002`; the resource relationship migration depends on revision `202607300003`; the resource classification migration depends on revision `202607300004`; the resource labels migration depends on revision `202607300005`.
 
 ## UUIDv7 and timestamps
 
@@ -128,6 +130,30 @@ Tenant-first indexes support these query patterns:
 - `ix_resource_classification_tenant_value` supports lookup by tenant and classification value.
 - `ix_resource_classification_tenant_type_value` supports lookup by tenant, classification type, and classification value.
 - `ix_resource_classification_tenant_valid_to` supports current and historical validity-window scans.
+
+## Labels and resource labels
+
+`label` rows are tenant-owned key/value definitions for lightweight operational annotations. They are separate from controlled classifications: classifications use global managed catalogs and type/value governance, while labels are local to a tenant and support operational grouping without changing canonical resource identity.
+
+Label keys are canonicalized by policy, not by trigger: direct SQL inserts must provide a trimmed, lowercase, non-empty `key`. Label values must be trimmed and non-empty, but value case is preserved. This makes keys effectively case-insensitive through canonical lowercase storage while values remain case-sensitive. The database enforces `key = lower(key)`, `key = btrim(key)`, `value = btrim(value)`, and non-empty key/value checks.
+
+Each tenant can define a `(key, value)` pair only once through `UNIQUE (tenant_id, key, value)`. `is_active` is intentionally not part of that key: inactive labels remain the historical definition for existing assignments, and reactivation should update the existing row rather than create a duplicate. Labels also expose `UNIQUE (tenant_id, id)` so tenant-safe child foreign keys can reference them.
+
+Optional label metadata includes nullable `display_name`, `description`, and `color`. If present, `display_name` and `description` must not be empty or whitespace-only. `color` is retained because it is useful persistence metadata for UI and reporting, but it is constrained to `#RRGGBB` hex format and remains case-preserving within that format.
+
+`resource_label` rows are tenant-owned temporal assignment facts. They use composite foreign keys so `(tenant_id, resource_id)` references `resource(tenant_id, id)` and `(tenant_id, label_id)` references `label(tenant_id, id)`. Deletes of referenced resources and labels are restrictive, and tenant deletion is restricted while labels exist.
+
+A current resource-label assignment has `valid_to IS NULL`; historical rows keep their validity window. Changes follow an append-oriented policy: close the old assignment with `valid_to`, then insert a new row. The database enforces `valid_to > valid_from`, source text validity, current assignment uniqueness, and restrictive foreign keys. It does not add a trigger-based immutable framework.
+
+Current assignment uniqueness is enforced by a tenant-first partial unique index over `tenant_id`, `resource_id`, and `label_id` where `valid_to IS NULL`. Historical rows may reuse the same assignment after closure. The schema intentionally does not enforce one-value-per-key, so different values for the same key can be assigned to one resource when the tenant workflow requires it.
+
+Indexes are scoped to observed query patterns without duplicating leftmost-prefix coverage:
+
+- `UNIQUE (tenant_id, key, value)` supports tenant/key and exact tenant/key/value label definition lookups.
+- `ix_label_tenant_id_is_active` supports tenant-local active/inactive label filtering.
+- `ix_resource_label_tenant_resource_label` supports tenant/resource history and exact resource/label assignment lookup.
+- `ix_resource_label_tenant_label_id` supports tenant/label reverse lookup across resources.
+- `ix_resource_label_tenant_valid_to` supports current and historical validity-window scans.
 
 ## Organization hierarchy
 
