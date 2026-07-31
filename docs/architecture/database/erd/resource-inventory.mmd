@@ -181,9 +181,13 @@ erDiagram
         UUID id PK
         UUID tenant_id FK
         UUID resource_id FK
+        UUID classification_type_id FK
         UUID classification_value_id FK
+        boolean is_primary
+        decimal confidence_score
         timestamp valid_from
         timestamp valid_to
+        string source
         timestamp created_at
     }
 
@@ -322,6 +326,7 @@ erDiagram
     ownership_role ||--o{ resource_ownership : defines
     relationship_type ||--o{ resource_relationship : defines
     classification_type ||--o{ classification_value : contains
+    classification_type ||--o{ resource_classification : scopes
     classification_value ||--o{ resource_classification : assigned_as
     lifecycle_status ||--o{ resource_state_history : records
     criticality ||--o{ resource_state_history : records

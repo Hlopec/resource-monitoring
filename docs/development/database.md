@@ -15,6 +15,7 @@ The database foundation introduces SQLAlchemy 2.x typed declarative models and A
 - `resource_identifier`
 - `resource_ownership`
 - `resource_relationship`
+- `resource_classification`
 - `ownership_role`
 - `relationship_type`
 - `classification_type`
@@ -48,7 +49,7 @@ Use:
 - `make db-history`
 
 `make db-downgrade` returns the database to the Alembic base state.
-The resource identifier migration depends on revision `202607300001`; the resource ownership migration depends on revision `202607300002`; the resource relationship migration depends on revision `202607300003`.
+The resource identifier migration depends on revision `202607300001`; the resource ownership migration depends on revision `202607300002`; the resource relationship migration depends on revision `202607300003`; the resource classification migration depends on revision `202607300004`.
 
 ## UUIDv7 and timestamps
 
@@ -105,6 +106,28 @@ A current relationship row has `valid_to IS NULL`; historical rows keep their va
 Current relationship uniqueness is enforced by a tenant-first partial unique index over `tenant_id`, `source_resource_id`, `target_resource_id`, and `relationship_type_id` where `valid_to IS NULL`. Historical rows with `valid_to` set may reuse the same directed relationship tuple. Reverse direction and the same endpoints with a different relationship type remain valid separate facts.
 
 Tenant-first indexes support traversal and history queries by source resource, target resource, relationship type, source plus type, target plus type, and current or historical validity state.
+
+## Resource classifications
+
+`resource_classification` rows are tenant-owned temporal classification facts linking a resource to a global `classification_value`. Classification catalogs remain global managed reference data and do not contain `tenant_id`.
+
+The table stores both `classification_type_id` and `classification_value_id`. This is a deliberate materialization: PostgreSQL partial unique indexes cannot use a join from `resource_classification` to `classification_value`, so storing the type id is the smallest declarative design that enforces one current primary value per resource and classification type without race-prone application validation or trigger code. The database proves the materialized type is correct through a composite foreign key from `(classification_type_id, classification_value_id)` to `classification_value(classification_type_id, id)`.
+
+Tenant isolation is enforced with the composite foreign key `(tenant_id, resource_id)` to `resource(tenant_id, id)`. `classification_type_id` references the global `classification_type` catalog, and the composite catalog foreign key references `classification_value`. Deletes of referenced resources, classification values, and classification types are restrictive so classification history is not removed implicitly.
+
+A current classification row has `valid_to IS NULL`; historical rows keep their validity window. Classification changes follow an append-oriented policy: close the old row by setting `valid_to`, then insert a new classification row. The database enforces `valid_to > valid_from`, confidence score bounds, current value uniqueness, one current primary value per type, source text validity, and restrictive foreign keys. Full mutation workflow policy remains application-level and no trigger-based immutable framework is added.
+
+Current value uniqueness is enforced by a tenant-first partial unique index over `tenant_id`, `resource_id`, and `classification_value_id` where `valid_to IS NULL`. Historical rows with `valid_to` set may reuse the same value.
+
+Current primary-per-type uniqueness is enforced by a tenant-first partial unique index over `tenant_id`, `resource_id`, and `classification_type_id` where `is_primary = true AND valid_to IS NULL`. Multiple current non-primary values of the same classification type are allowed. Current primary values for different classification types are also allowed, and historical primary rows may be reused after they are closed.
+
+Tenant-first indexes support these query patterns:
+
+- `ix_resource_classification_tenant_resource_value` supports lookup by tenant and resource, and exact resource/value history.
+- `ix_resource_classification_tenant_resource_type` supports lookup by tenant, resource, and classification type.
+- `ix_resource_classification_tenant_value` supports lookup by tenant and classification value.
+- `ix_resource_classification_tenant_type_value` supports lookup by tenant, classification type, and classification value.
+- `ix_resource_classification_tenant_valid_to` supports current and historical validity-window scans.
 
 ## Organization hierarchy
 

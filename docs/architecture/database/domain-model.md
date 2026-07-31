@@ -60,7 +60,11 @@ A current relationship row has `valid_to IS NULL`; changing an endpoint, relatio
 
 ### Classification type, classification value, and resource classification
 
-Classification values provide a controlled vocabulary for tagging resources. Resource classification records the assignment of a classification value to a resource with a temporal validity window so the model can preserve the history of the assignment.
+Classification types and values remain global managed catalog values. Classification values provide a controlled vocabulary for classifying resources, and each value belongs to exactly one classification type.
+
+The implemented `resource_classification` table stores tenant-owned temporal assignment facts. It uses a tenant-safe composite foreign key so `(tenant_id, resource_id)` must reference a resource in the same tenant. It also stores `classification_type_id` next to `classification_value_id` so PostgreSQL can enforce one current primary value per resource and classification type with a declarative partial unique index. A composite catalog foreign key from `(classification_type_id, classification_value_id)` to `classification_value(classification_type_id, id)` proves that the stored value belongs to the stored type.
+
+A current classification row has `valid_to IS NULL`; historical rows keep their validity window. Changing a classification value, confidence score, source, or primary designation should close the old row and insert a new temporal fact. Current duplicate value assignments are unique per `tenant_id`, `resource_id`, and `classification_value_id`, while historical reuse remains allowed. Multiple current non-primary values of the same type are allowed, but only one current primary row is allowed per `tenant_id`, `resource_id`, and `classification_type_id`. Referenced resources, classification values, and classification types use restrictive deletes.
 
 ### Label and resource label
 

@@ -113,3 +113,7 @@ class Resource(UUIDv7PrimaryKeyMixin, TimestampMixin, Base):
         overlaps="outgoing_relationships,source_resource",
         passive_deletes=True,
     )
+    classifications: Mapped[list["ResourceClassification"]] = relationship(
+        back_populates="resource",
+        passive_deletes=True,
+    )
