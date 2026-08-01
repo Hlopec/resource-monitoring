@@ -42,6 +42,14 @@ The application builds a SQLAlchemy URL from typed settings. Secrets are not com
 `POSTGRES_PASSWORD` is required at runtime. Local development values live in `.env.example`; application settings fail fast when the password is absent.
 Docker Compose passes the `POSTGRES_*` settings into the API container so Alembic, tests, and seed commands use the same typed settings as application code.
 
+## Sessions and Unit of Work
+
+`app.db.session` owns the shared synchronous SQLAlchemy engine and central `SessionLocal` factory. The factory uses `expire_on_commit=False` and is reused by framework helpers, scripts, and the SQLAlchemy Unit of Work. Unit of Work instances create sessions from an injected factory; tests inject their isolated `sessionmaker`, while production wiring uses the shared `SessionLocal`.
+
+Application command workflows should use `app.persistence.sqlalchemy.SQLAlchemyUnitOfWork`. It is a single-use context manager with explicit `commit()` and `rollback()`. Exiting without a successful explicit commit rolls back. Exceptions trigger rollback and propagate unchanged. The Unit of Work closes its session on exit and does not dispose the shared engine.
+
+`get_session()` remains available for lower-level framework integration. `transaction_session()` remains available for current low-level compatibility paths and scripts, but it is not the application-core transaction abstraction for future use cases.
+
 ## Migrations
 
 Schema changes are managed only through Alembic. The API does not call `create_all()` during startup.

@@ -10,7 +10,7 @@ This stage does not implement concrete repositories, a SQLAlchemy Unit of Work, 
 
 ## Current-State Assessment
 
-The current repository uses synchronous SQLAlchemy. `api/app/db/session.py` creates a synchronous engine with `create_engine(...)`, configures `SessionLocal = sessionmaker(..., expire_on_commit=False)`, exposes `get_session()`, and provides a small `transaction_session()` context manager that commits on successful exit and rolls back on exceptions.
+The current repository uses synchronous SQLAlchemy. `api/app/db/session.py` creates a synchronous engine with `create_engine(...)`, centralizes `SessionLocal` through `create_session_factory(..., expire_on_commit=False)`, exposes `get_session()`, and provides a small `transaction_session()` context manager that commits on successful exit and rolls back on exceptions.
 
 Database settings are loaded through `DatabaseSettings` in `api/app/db/settings.py`. Alembic imports `app.models` in `api/alembic/env.py`, which registers all SQLAlchemy mapped models against `Base.metadata`. Tests create isolated PostgreSQL databases in `api/tests/conftest.py`, run Alembic to `head`, create synchronous sessions with `sessionmaker`, and roll back fixture sessions after use.
 
@@ -54,7 +54,7 @@ api/app/persistence/
   sqlalchemy/
 ```
 
-`app.application` is the application core boundary. It contains application-facing errors and ports and must not import SQLAlchemy. `app.persistence.sqlalchemy` is the future adapter location for SQLAlchemy repositories and Unit of Work implementations. This stage intentionally keeps it as a boundary marker rather than adding concrete persistence behavior.
+`app.application` is the application core boundary. It contains application-facing errors and ports and must not import SQLAlchemy. `app.persistence.sqlalchemy` is the adapter location for SQLAlchemy persistence code. The concrete synchronous Unit of Work lives in `app.persistence.sqlalchemy.unit_of_work.SQLAlchemyUnitOfWork`; future concrete repositories will live under the same persistence boundary.
 
 ## Repository Contract Conventions
 
@@ -78,11 +78,19 @@ Entering the context opens one session and transaction. Multiple repositories ex
 
 On exception, the Unit of Work rolls back and closes the session. When the context exits without an explicit successful commit, it also rolls back and closes the session. After a failed flush or commit, the Unit of Work is considered failed; callers should roll back, exit the context, and start a new Unit of Work. Repository instances are scoped to one Unit of Work lifetime and must not be reused after the Unit of Work closes.
 
+The concrete SQLAlchemy implementation is single-use and follows explicit lifecycle states: `new`, `active`, `committed`, `rolled_back`, `failed`, and `closed`. It rejects commit, rollback, or session access before `__enter__`; rejects entering an already active instance; rejects reuse after closure; rejects a second commit; rejects rollback after commit; and rejects commit after rollback or failed transaction. Cleanup rollback is safe and repeated explicit rollback is idempotent while the Unit of Work is still open.
+
+The concrete `session` property is infrastructure-facing and available only while the Unit of Work is active. It is not part of the application-facing `UnitOfWork` protocol. Future SQLAlchemy repositories attached to one Unit of Work must receive this exact session instance and must never call `commit()`.
+
+`SQLAlchemyUnitOfWork` accepts an injectable synchronous session factory. Production wiring uses the shared `SessionLocal` configured from the application engine. Tests inject their own isolated `sessionmaker` bound to the test engine. A Unit of Work creates exactly one session from the factory, closes that session on exit, and does not dispose the shared engine.
+
 ## Transaction Ownership
 
 One application command or use case normally owns one Unit of Work. Application services decide whether the operation succeeds. Repositories never commit and helper functions must not hide commits. External network calls should not normally run inside an open database transaction.
 
 Read-only query services may later use a separate controlled session pattern. SQLAlchemy and PostgreSQL errors are translated at the persistence boundary. Retry behavior for deadlocks or serialization failures must be explicit at the application orchestration level and must not be hidden inside repositories.
+
+The existing `get_session()` helper remains available for lower-level framework integration. The existing `transaction_session()` helper remains for current low-level scripts or compatibility paths, but it is not the application-core transaction abstraction. New application command workflows should use `SQLAlchemyUnitOfWork`.
 
 ## Tenant-Safety Rules
 
@@ -107,7 +115,7 @@ Application code raises application-facing errors:
 - `TenantBoundaryError`
 - `PersistenceError`
 
-Future SQLAlchemy persistence implementations translate storage failures at the boundary. Translation should rely on stable information such as SQLSTATE, PostgreSQL constraint names, driver exception types, and SQLAlchemy optimistic concurrency exception types. Application code must not parse human-readable PostgreSQL error messages.
+Future SQLAlchemy persistence implementations translate storage failures at the boundary. Translation should rely on stable information such as SQLSTATE, PostgreSQL constraint names, driver exception types, and SQLAlchemy optimistic concurrency exception types. Application code must not parse human-readable PostgreSQL error messages. The current Unit of Work deliberately preserves original SQLAlchemy/database exceptions; the translation matrix belongs to `03.0.11`.
 
 ## Relationship-Loading Rules
 
@@ -125,15 +133,17 @@ This is not a CQRS framework. This stage does not introduce a separate read data
 
 Architecture enforcement tests check that application modules do not import SQLAlchemy, ports do not import concrete persistence implementations, ports do not expose SQLAlchemy-facing types, tenant-scoped repository protocols require explicit tenant ids, Unit of Work lifecycle methods exist, package imports succeed, and the application error hierarchy is valid.
 
+SQLAlchemy Unit of Work integration tests verify explicit commit, rollback-by-default for inserts/updates/deletes/flushed rows, exception rollback and propagation, failed flush/commit cleanup, single-use lifecycle errors, session isolation, factory call count, shared engine usability after Unit of Work exit, protocol compliance, and compatibility with `get_session()` and `transaction_session()`.
+
 Future repository implementation issues must add integration tests proving tenant isolation, transaction behavior, no repository-level commits, error translation, relationship loading behavior, and query shape for critical paths.
 
 ## Accepted Trade-Offs
 
-The project remains synchronous because the current engine, sessions, tests, and Alembic wiring are synchronous. ORM mapped entities may be used by application services initially to avoid premature duplication. The Unit of Work and repository modules are protocols only; concrete SQLAlchemy implementations begin in `03.0.2+`.
+The project remains synchronous because the current engine, sessions, tests, and Alembic wiring are synchronous. ORM mapped entities may be used by application services initially to avoid premature duplication. The SQLAlchemy Unit of Work is concrete, but repository modules remain protocol-only until the later repository issues.
 
 ## Deferred Concerns
 
-Deferred work includes the concrete SQLAlchemy Unit of Work, concrete repository contracts, shared SQLAlchemy repository helpers, use-case services, DTO/result types, persistence error translation matrix, query services, pagination, query-count tests, retry policy, external transaction orchestration, and any future decision to introduce pure domain entities.
+Deferred work includes concrete repository contracts, shared SQLAlchemy repository helpers, use-case services, DTO/result types, persistence error translation matrix, query services, pagination, query-count tests, retry policy, external transaction orchestration, and any future decision to introduce pure domain entities.
 
 ## Implementation Roadmap
 
