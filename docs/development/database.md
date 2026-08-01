@@ -46,6 +46,8 @@ Docker Compose passes the `POSTGRES_*` settings into the API container so Alembi
 
 Schema changes are managed only through Alembic. The API does not call `create_all()` during startup.
 
+The consolidated Stage `02.0` integrity audit is documented in `docs/architecture/database/resource-inventory-audit.md`. It records table-level constraints, tenant isolation, temporal semantics, index decisions, scaling assumptions, accepted trade-offs, and deferred service-layer responsibilities.
+
 Use:
 
 - `make db-upgrade`
@@ -74,7 +76,7 @@ Resource archive behavior is logical. `archived_at` records archive state withou
 
 ## Resource state history
 
-`resource_state` stores tenant-owned temporal history for the snapshot state fields kept on `resource`: `lifecycle_status_id`, `criticality_id`, `exposure_level_id`, `source_priority`, and `confidence_score`. The resource snapshot remains the fast current read model; `resource_state` is the auditable history model.
+`resource_state` stores tenant-owned temporal history for the snapshot state fields kept on `resource`: `lifecycle_status_id`, `criticality_id`, `exposure_level_id`, `source_priority`, and `confidence_score`. The resource snapshot remains the fast current read model; `resource_state` is the auditable history model. The intended invariant is that the mutable `resource` state snapshot equals the current `resource_state` row where `valid_to IS NULL`.
 
 The table uses a tenant-aware composite foreign key so `(tenant_id, resource_id)` references `resource(tenant_id, id)`. Reference catalog fields point to the global `lifecycle_status`, `criticality`, and `exposure_level` catalogs. Deletes of referenced resources and catalog rows are restrictive so state history is not removed implicitly.
 
