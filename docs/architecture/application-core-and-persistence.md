@@ -48,7 +48,14 @@ The minimum package baseline is:
 api/app/application/
   errors.py
   ports/
+    catalogs.py
+    labels.py
+    lineage.py
+    organizations.py
     repositories.py
+    resources.py
+    temporal.py
+    tenants.py
     unit_of_work.py
 api/app/persistence/
   sqlalchemy/
@@ -63,6 +70,39 @@ Repository contracts are synchronous protocols. Tenant-owned repository methods 
 Repository contracts express domain-oriented operations. They must not expose SQLAlchemy `Session`, `Select`, `Query`, `Row`, driver exceptions, FastAPI types, Pydantic types, unrestricted public CRUD, or generic `filter(**kwargs)` APIs. Repositories do not call `commit()`. Complex read projections, search, history views, and pagination may later be implemented through query services rather than generic repositories.
 
 Global managed catalogs remain global. They use separate explicit contracts and must not be forced into tenant-owned repository conventions.
+
+The Resource Inventory repository inventory is:
+
+| Repository | Tenant scoped | Primary responsibility | Mutation support |
+| --- | --- | --- | --- |
+| `TenantRepository` | No | Tenant lookup and creation by id or slug | `add` |
+| `OrganizationRepository` | Yes | Organization access by id, canonical name, external key, and direct children | `add` |
+| `ResourceRepository` | Yes | Resource aggregate access by id, canonical name, and explicit lock-oriented lookup | `add` |
+| `LabelRepository` | Yes | Tenant label lookup by id or key/value and active-label listing | `add` |
+| `ManagedCatalogRepository` | No | Global catalog lookup by id/code and active listing | Read-only |
+| `ClassificationValueRepository` | No | Classification values scoped by classification type | Read-only |
+| `ResourceIdentifierRepository` | Yes | Current identifier lookup by resource or normalized value | `add` |
+| `ResourceOwnershipRepository` | Yes | Current ownership and current-primary ownership lookup | `add` |
+| `ResourceRelationshipRepository` | Yes | Current incoming/outgoing resource relationships | `add` |
+| `ResourceClassificationRepository` | Yes | Current classifications and current-primary classification lookup | `add` |
+| `ResourceLabelRepository` | Yes | Current resource label assignments | `add` |
+| `ResourceStateRepository` | Yes | Current state and state history access | `add` |
+| `ResourceAliasRepository` | Yes | Alias-to-resource lookup and resource alias listing | `add` |
+| `ResourceMergeRepository` | Yes | Outgoing and incoming merge lineage persistence | `add` |
+
+Singular lookups return `Entity | None`. Collection methods return `Sequence[Entity]`. Existence methods return `bool`. Mutation methods return `None` and only attach rows to the active Unit of Work; they do not commit, roll back, open sessions, or own transaction lifecycle.
+
+Tenant is the scope root, so `TenantRepository` does not require a separate tenant context. Tenant-owned repositories require explicit `tenant_id` for all read/access methods. `add(entity)` methods rely on the entity's own tenant fields and still run inside the caller's Unit of Work. Cross-tenant misses must remain indistinguishable from ordinary not-found results.
+
+Global managed catalog repositories deliberately do not accept `tenant_id`; `resource_type`, `identifier_type`, `relationship_type`, `ownership_role`, `classification_type`, `classification_value`, `lifecycle_status`, `criticality`, and `exposure_level` remain global managed catalogs.
+
+The resource aggregate contract includes `get_for_update(...)` to reserve a place for explicit concurrent mutation workflows. It does not expose SQLAlchemy lock expressions. Identifier-based resource matching belongs to `ResourceIdentifierRepository`; canonical merge traversal belongs to later merge/query service work and is not exposed on `ResourceRepository` in this stage.
+
+Temporal fact repositories expose current/history lookup boundaries and `add(...)` only. They do not expose `close_current(...)`, `replace_current(...)`, or a universal temporal repository framework because temporal replacement semantics belong to later application-service issues.
+
+Alias and merge contracts expose alias resolution and merge-lineage persistence only. They do not implement merge execution, canonical traversal, alias transfer, deduplication, or conflict-resolution workflows.
+
+Repository contracts are defined independently from the application-facing Unit of Work. The Unit of Work protocol is not expanded with repository properties in this stage, because doing so would force the concrete SQLAlchemy Unit of Work to expose repository implementations before those implementations exist. Future SQLAlchemy repository implementation issues will attach concrete repositories to the Unit of Work while preserving this contract boundary.
 
 ## Unit of Work Semantics
 
@@ -135,6 +175,8 @@ Architecture enforcement tests check that application modules do not import SQLA
 
 SQLAlchemy Unit of Work integration tests verify explicit commit, rollback-by-default for inserts/updates/deletes/flushed rows, exception rollback and propagation, failed flush/commit cleanup, single-use lifecycle errors, session isolation, factory call count, shared engine usability after Unit of Work exit, protocol compliance, and compatibility with `get_session()` and `transaction_session()`.
 
+Repository contract architecture tests verify that application-facing repository modules do not import SQLAlchemy or concrete persistence implementations, tenant-owned methods require non-optional `tenant_id`, global catalog contracts remain tenant-independent, repository contracts do not expose transaction or generic query methods, SQLAlchemy-facing types stay out of application signatures, collection methods use `Sequence`, and exported protocols define the expected signatures.
+
 Future repository implementation issues must add integration tests proving tenant isolation, transaction behavior, no repository-level commits, error translation, relationship loading behavior, and query shape for critical paths.
 
 ## Accepted Trade-Offs
@@ -143,7 +185,7 @@ The project remains synchronous because the current engine, sessions, tests, and
 
 ## Deferred Concerns
 
-Deferred work includes concrete repository contracts, shared SQLAlchemy repository helpers, use-case services, DTO/result types, persistence error translation matrix, query services, pagination, query-count tests, retry policy, external transaction orchestration, and any future decision to introduce pure domain entities.
+Deferred work includes concrete SQLAlchemy repository implementations, shared SQLAlchemy repository helpers, use-case services, DTO/result types, persistence error translation matrix, query services, pagination, temporal replacement behavior, merge execution, canonical traversal, query-count tests, retry policy, external transaction orchestration, and any future decision to introduce pure domain entities.
 
 ## Implementation Roadmap
 
