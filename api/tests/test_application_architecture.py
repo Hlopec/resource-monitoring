@@ -58,8 +58,10 @@ from app.models import (
 ROOT = Path(__file__).resolve().parents[1]
 APPLICATION_ROOT = ROOT / "app" / "application"
 PORTS_ROOT = APPLICATION_ROOT / "ports"
+SQLALCHEMY_PERSISTENCE_ROOT = ROOT / "app" / "persistence" / "sqlalchemy"
 
 SQLALCHEMY_IMPORT_ROOTS = {"sqlalchemy"}
+FORBIDDEN_PERSISTENCE_IMPORT_ROOTS = {"fastapi", "pydantic"}
 SQLALCHEMY_TYPE_NAMES = {
     "InstrumentedAttribute",
     "Query",
@@ -144,6 +146,15 @@ def test_application_modules_do_not_import_sqlalchemy() -> None:
         imports = _imports_for(path)
         assert not any(
             imported.split(".", 1)[0] in SQLALCHEMY_IMPORT_ROOTS for imported in imports
+        ), path
+
+
+def test_sqlalchemy_persistence_does_not_import_api_or_schema_frameworks() -> None:
+    for path in _python_files(SQLALCHEMY_PERSISTENCE_ROOT):
+        imports = _imports_for(path)
+        assert not any(
+            imported.split(".", 1)[0] in FORBIDDEN_PERSISTENCE_IMPORT_ROOTS
+            for imported in imports
         ), path
 
 
