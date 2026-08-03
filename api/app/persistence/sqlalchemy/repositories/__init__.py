@@ -5,6 +5,10 @@ from app.persistence.sqlalchemy.repositories.base import (
     SQLAlchemyRepository,
     bind_repository,
 )
+from app.persistence.sqlalchemy.repositories.catalogs import (
+    SQLAlchemyClassificationValueRepository,
+    SQLAlchemyManagedCatalogRepository,
+)
 from app.persistence.sqlalchemy.repositories.helpers import (
     apply_for_update,
     entity_select,
@@ -23,6 +27,8 @@ from app.persistence.sqlalchemy.repositories.tenants import SQLAlchemyTenantRepo
 
 __all__ = [
     "RepositoryT",
+    "SQLAlchemyClassificationValueRepository",
+    "SQLAlchemyManagedCatalogRepository",
     "SQLAlchemyOrganizationRepository",
     "SQLAlchemyResourceRepository",
     "SQLAlchemyRepository",

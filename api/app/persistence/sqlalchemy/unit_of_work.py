@@ -8,7 +8,19 @@ from types import TracebackType
 
 from sqlalchemy.orm import Session
 
+from app.models import (
+    ClassificationType,
+    Criticality,
+    ExposureLevel,
+    IdentifierType,
+    LifecycleStatus,
+    OwnershipRole,
+    RelationshipType,
+    ResourceType,
+)
 from app.persistence.sqlalchemy.repositories import (
+    SQLAlchemyClassificationValueRepository,
+    SQLAlchemyManagedCatalogRepository,
     SQLAlchemyOrganizationRepository,
     SQLAlchemyResourceRepository,
     SQLAlchemyTenantRepository,
@@ -57,6 +69,27 @@ class SQLAlchemyUnitOfWork:
         self._tenants: SQLAlchemyTenantRepository | None = None
         self._organizations: SQLAlchemyOrganizationRepository | None = None
         self._resources: SQLAlchemyResourceRepository | None = None
+        self._resource_types: SQLAlchemyManagedCatalogRepository[ResourceType] | None = None
+        self._identifier_types: (
+            SQLAlchemyManagedCatalogRepository[IdentifierType] | None
+        ) = None
+        self._relationship_types: (
+            SQLAlchemyManagedCatalogRepository[RelationshipType] | None
+        ) = None
+        self._ownership_roles: (
+            SQLAlchemyManagedCatalogRepository[OwnershipRole] | None
+        ) = None
+        self._classification_types: (
+            SQLAlchemyManagedCatalogRepository[ClassificationType] | None
+        ) = None
+        self._classification_values: SQLAlchemyClassificationValueRepository | None = None
+        self._lifecycle_statuses: (
+            SQLAlchemyManagedCatalogRepository[LifecycleStatus] | None
+        ) = None
+        self._criticalities: SQLAlchemyManagedCatalogRepository[Criticality] | None = None
+        self._exposure_levels: (
+            SQLAlchemyManagedCatalogRepository[ExposureLevel] | None
+        ) = None
         self._state = _UnitOfWorkState.NEW
 
     def __enter__(self) -> SQLAlchemyUnitOfWork:
@@ -70,6 +103,41 @@ class SQLAlchemyUnitOfWork:
         self._tenants = SQLAlchemyTenantRepository(self.session)
         self._organizations = SQLAlchemyOrganizationRepository(self.session)
         self._resources = SQLAlchemyResourceRepository(self.session)
+        self._resource_types = SQLAlchemyManagedCatalogRepository(
+            self.session,
+            ResourceType,
+        )
+        self._identifier_types = SQLAlchemyManagedCatalogRepository(
+            self.session,
+            IdentifierType,
+        )
+        self._relationship_types = SQLAlchemyManagedCatalogRepository(
+            self.session,
+            RelationshipType,
+        )
+        self._ownership_roles = SQLAlchemyManagedCatalogRepository(
+            self.session,
+            OwnershipRole,
+        )
+        self._classification_types = SQLAlchemyManagedCatalogRepository(
+            self.session,
+            ClassificationType,
+        )
+        self._classification_values = SQLAlchemyClassificationValueRepository(
+            self.session
+        )
+        self._lifecycle_statuses = SQLAlchemyManagedCatalogRepository(
+            self.session,
+            LifecycleStatus,
+        )
+        self._criticalities = SQLAlchemyManagedCatalogRepository(
+            self.session,
+            Criticality,
+        )
+        self._exposure_levels = SQLAlchemyManagedCatalogRepository(
+            self.session,
+            ExposureLevel,
+        )
         return self
 
     def __exit__(
@@ -91,6 +159,15 @@ class SQLAlchemyUnitOfWork:
                 self._tenants = None
                 self._organizations = None
                 self._resources = None
+                self._resource_types = None
+                self._identifier_types = None
+                self._relationship_types = None
+                self._ownership_roles = None
+                self._classification_types = None
+                self._classification_values = None
+                self._lifecycle_statuses = None
+                self._criticalities = None
+                self._exposure_levels = None
                 self._state = _UnitOfWorkState.CLOSED
 
         return False
@@ -118,6 +195,84 @@ class SQLAlchemyUnitOfWork:
         if self._resources is None:
             raise UnitOfWorkNotActiveError("Resource repository is not active")
         return self._resources
+
+    @property
+    def resource_types(self) -> SQLAlchemyManagedCatalogRepository[ResourceType]:
+        """Return the active resource type catalog repository."""
+        self.session
+        if self._resource_types is None:
+            raise UnitOfWorkNotActiveError("Resource type repository is not active")
+        return self._resource_types
+
+    @property
+    def identifier_types(self) -> SQLAlchemyManagedCatalogRepository[IdentifierType]:
+        """Return the active identifier type catalog repository."""
+        self.session
+        if self._identifier_types is None:
+            raise UnitOfWorkNotActiveError("Identifier type repository is not active")
+        return self._identifier_types
+
+    @property
+    def relationship_types(
+        self,
+    ) -> SQLAlchemyManagedCatalogRepository[RelationshipType]:
+        """Return the active relationship type catalog repository."""
+        self.session
+        if self._relationship_types is None:
+            raise UnitOfWorkNotActiveError("Relationship type repository is not active")
+        return self._relationship_types
+
+    @property
+    def ownership_roles(self) -> SQLAlchemyManagedCatalogRepository[OwnershipRole]:
+        """Return the active ownership role catalog repository."""
+        self.session
+        if self._ownership_roles is None:
+            raise UnitOfWorkNotActiveError("Ownership role repository is not active")
+        return self._ownership_roles
+
+    @property
+    def classification_types(
+        self,
+    ) -> SQLAlchemyManagedCatalogRepository[ClassificationType]:
+        """Return the active classification type catalog repository."""
+        self.session
+        if self._classification_types is None:
+            raise UnitOfWorkNotActiveError("Classification type repository is not active")
+        return self._classification_types
+
+    @property
+    def classification_values(self) -> SQLAlchemyClassificationValueRepository:
+        """Return the active classification value repository."""
+        self.session
+        if self._classification_values is None:
+            raise UnitOfWorkNotActiveError("Classification value repository is not active")
+        return self._classification_values
+
+    @property
+    def lifecycle_statuses(
+        self,
+    ) -> SQLAlchemyManagedCatalogRepository[LifecycleStatus]:
+        """Return the active lifecycle status catalog repository."""
+        self.session
+        if self._lifecycle_statuses is None:
+            raise UnitOfWorkNotActiveError("Lifecycle status repository is not active")
+        return self._lifecycle_statuses
+
+    @property
+    def criticalities(self) -> SQLAlchemyManagedCatalogRepository[Criticality]:
+        """Return the active criticality catalog repository."""
+        self.session
+        if self._criticalities is None:
+            raise UnitOfWorkNotActiveError("Criticality repository is not active")
+        return self._criticalities
+
+    @property
+    def exposure_levels(self) -> SQLAlchemyManagedCatalogRepository[ExposureLevel]:
+        """Return the active exposure level catalog repository."""
+        self.session
+        if self._exposure_levels is None:
+            raise UnitOfWorkNotActiveError("Exposure level repository is not active")
+        return self._exposure_levels
 
     @property
     def session(self) -> Session:

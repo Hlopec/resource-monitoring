@@ -3,9 +3,23 @@
 from types import TracebackType
 from typing import Protocol, Self
 
+from app.application.ports.catalogs import (
+    ClassificationValueRepository,
+    ManagedCatalogRepository,
+)
 from app.application.ports.organizations import OrganizationRepository
 from app.application.ports.resources import ResourceRepository
 from app.application.ports.tenants import TenantRepository
+from app.models import (
+    ClassificationType,
+    Criticality,
+    ExposureLevel,
+    IdentifierType,
+    LifecycleStatus,
+    OwnershipRole,
+    RelationshipType,
+    ResourceType,
+)
 
 
 class UnitOfWork(Protocol):
@@ -21,6 +35,15 @@ class UnitOfWork(Protocol):
     tenants: TenantRepository
     organizations: OrganizationRepository
     resources: ResourceRepository
+    resource_types: ManagedCatalogRepository[ResourceType]
+    identifier_types: ManagedCatalogRepository[IdentifierType]
+    relationship_types: ManagedCatalogRepository[RelationshipType]
+    ownership_roles: ManagedCatalogRepository[OwnershipRole]
+    classification_types: ManagedCatalogRepository[ClassificationType]
+    classification_values: ClassificationValueRepository
+    lifecycle_statuses: ManagedCatalogRepository[LifecycleStatus]
+    criticalities: ManagedCatalogRepository[Criticality]
+    exposure_levels: ManagedCatalogRepository[ExposureLevel]
 
     def __enter__(self) -> Self:
         """Open the Unit of Work and return the active instance."""
