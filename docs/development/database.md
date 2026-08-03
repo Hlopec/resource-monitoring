@@ -50,6 +50,14 @@ Application command workflows should use `app.persistence.sqlalchemy.SQLAlchemyU
 
 `get_session()` remains available for lower-level framework integration. `transaction_session()` remains available for current low-level compatibility paths and scripts, but it is not the application-core transaction abstraction for future use cases.
 
+Shared internal repository primitives live under `app.persistence.sqlalchemy.repositories`. Concrete SQLAlchemy repositories should receive the active `SQLAlchemyUnitOfWork.session` by constructor injection or the small internal `bind_repository(...)` helper. Repositories must not create sessions or engines, commit, roll back, close the shared session, dispose the engine, or create independent transaction boundaries.
+
+The base repository supports only internal persistence operations: add an entity to the active session, explicitly flush pending work, explicitly refresh an entity, and evaluate prepared scalar, sequence, or existence statements. `add(...)` does not commit. `flush()` is available only for operations that need generated/default values, early constraint validation, or dependent writes; failed flushes remain part of the Unit of Work transaction and are cleaned up by Unit of Work rollback/exit behavior.
+
+Tenant-owned repository infrastructure uses helpers that require explicit `tenant_id` and apply tenant predicates centrally. Tenant-owned id lookup is always built with both `tenant_id` and entity `id`; there is no optional tenant scope, unscoped fallback, administrative bypass flag, or ambient tenant context. Global managed catalog repositories use the plain base infrastructure without tenant context.
+
+Loading and locking are explicit. Repository helpers may apply concrete loader options selected for a specific operation, but there is no blanket eager loading or include/expand framework. `SELECT ... FOR UPDATE` is opt-in through a helper and is not applied to normal reads. Optimistic concurrency remains model-specific: `resource.record_version` is mapped as SQLAlchemy's `version_id_col`, and repository infrastructure preserves normal `StaleDataError` behavior without translating or manually incrementing version columns.
+
 ## Migrations
 
 Schema changes are managed only through Alembic. The API does not call `create_all()` during startup.

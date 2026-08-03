@@ -59,9 +59,12 @@ api/app/application/
     unit_of_work.py
 api/app/persistence/
   sqlalchemy/
+    repositories/
 ```
 
 `app.application` is the application core boundary. It contains application-facing errors and ports and must not import SQLAlchemy. `app.persistence.sqlalchemy` is the adapter location for SQLAlchemy persistence code. The concrete synchronous Unit of Work lives in `app.persistence.sqlalchemy.unit_of_work.SQLAlchemyUnitOfWork`; future concrete repositories will live under the same persistence boundary.
+
+Shared SQLAlchemy repository infrastructure now lives in `app.persistence.sqlalchemy.repositories`. It is an internal adapter utility package, not an application-facing contract package. `base.py` contains the session-bound base repository and direct binding helper, `tenant_scoped.py` contains tenant-owned repository primitives, and `helpers.py` contains small typed statement helpers for entity lookup, tenant-scoped lookup, explicit loader options, and opt-in `SELECT ... FOR UPDATE`.
 
 ## Repository Contract Conventions
 
@@ -104,6 +107,8 @@ Alias and merge contracts expose alias resolution and merge-lineage persistence 
 
 Repository contracts are defined independently from the application-facing Unit of Work. The Unit of Work protocol is not expanded with repository properties in this stage, because doing so would force the concrete SQLAlchemy Unit of Work to expose repository implementations before those implementations exist. Future SQLAlchemy repository implementation issues will attach concrete repositories to the Unit of Work while preserving this contract boundary.
 
+The shared SQLAlchemy base repository exposes only internal primitives: attach an entity to the injected session, explicitly flush pending work, explicitly refresh an entity, evaluate prepared scalar or sequence statements, and test existence through a prepared statement. It deliberately does not expose a public generic CRUD interface, unrestricted `filter(**kwargs)`, generic query execution, destructive delete helpers, transaction control, or domain-specific lookups. Concrete repositories in `03.0.5+` remain responsible for methods such as `get_by_slug`, `get_by_canonical_name`, current temporal lookups, lineage lookups, and use-case-specific loading choices.
+
 ## Unit of Work Semantics
 
 The application-facing Unit of Work supports:
@@ -124,9 +129,13 @@ The concrete `session` property is infrastructure-facing and available only whil
 
 `SQLAlchemyUnitOfWork` accepts an injectable synchronous session factory. Production wiring uses the shared `SessionLocal` configured from the application engine. Tests inject their own isolated `sessionmaker` bound to the test engine. A Unit of Work creates exactly one session from the factory, closes that session on exit, and does not dispose the shared engine.
 
+SQLAlchemy repositories are constructed with the active Unit of Work session through direct constructor injection or the small internal `bind_repository(...)` helper. They do not create sessions, engines, nested transactions, or repository-owned transaction boundaries. Multiple repositories created inside one Unit of Work share the same session instance. Repository instances are scoped to that Unit of Work lifetime and are not safe to reuse after the Unit of Work closes.
+
 ## Transaction Ownership
 
 One application command or use case normally owns one Unit of Work. Application services decide whether the operation succeeds. Repositories never commit and helper functions must not hide commits. External network calls should not normally run inside an open database transaction.
+
+Repository `add(...)`, lookup helpers, refresh helpers, and locking helpers never commit, roll back, close a session, dispose an engine, retry a failed transaction, or translate SQLAlchemy/database exceptions. A failed flush remains the Unit of Work's failed transaction; cleanup is handled by `SQLAlchemyUnitOfWork` rollback-on-exit or an explicit Unit of Work rollback. Repositories may flush only when the concrete operation requires generated/default values, early constraint validation, or subsequent dependent writes, and no helper commits after flushing.
 
 Read-only query services may later use a separate controlled session pattern. SQLAlchemy and PostgreSQL errors are translated at the persistence boundary. Retry behavior for deadlocks or serialization failures must be explicit at the application orchestration level and must not be hidden inside repositories.
 
@@ -137,6 +146,8 @@ The existing `get_session()` helper remains available for lower-level framework 
 Tenant-owned repository methods require explicit tenant context. Lookups by entity id alone are prohibited for tenant-owned entities. There is no optional, ambient, or implicit tenant scope for normal application operations.
 
 SQLAlchemy implementations must apply tenant predicates even when PostgreSQL composite foreign keys also enforce integrity. Cross-tenant misses return the same application-facing result as absent rows. Future global administrative access must use separate explicit contracts. Every future concrete repository issue must include tenant-isolation tests.
+
+Tenant-scoped repository infrastructure requires explicit `tenant_id` for tenant-owned statement construction and entity lookup. The shared `tenant_select(...)` and `tenant_entity_select(...)` helpers centralize the tenant predicate; tenant-owned id lookup always includes both `tenant_id` and entity `id`. There is no `tenant_id=None` default, no ambient tenant scope, no `ignore_tenant` bypass flag, and no unscoped fallback helper on the tenant-scoped base. Global catalog repositories use the plain base repository and are not forced through tenant-scoped infrastructure.
 
 ## ORM Mapped-Entity Policy
 
@@ -163,6 +174,10 @@ Lazy loading must not unexpectedly occur outside an active Unit of Work. Reposit
 
 Critical query paths should later include query-count or SQL-shape tests. `SELECT ... FOR UPDATE` is reserved for explicit concurrent mutation workflows. Hidden refresh or expiration behavior must not be relied on without documentation.
 
+The shared loading helper only applies explicit SQLAlchemy loader options chosen by a concrete repository. It does not implement blanket eager loading, an include/expand framework, or global relationship-loading mutation. The locking helper only wraps a prepared statement with `with_for_update()` when a concrete repository asks for pessimistic locking; normal reads are not locked automatically, and no advisory locks, retry loops, deadlock handling, or lock timeout policy are introduced here.
+
+`Resource` is currently the only mapped entity with SQLAlchemy optimistic concurrency enabled through `record_version` and `version_id_col`. Shared repository infrastructure preserves SQLAlchemy's normal version-check behavior and does not catch `StaleDataError`, translate it, disable version checks, or define a generic version-column convention for all models. Broader persistence error translation remains deferred to `03.0.11`.
+
 ## Write/Read Separation
 
 Repositories support transactional entity and aggregate mutation workflows. Query services support projections, filtering, history, search, and pagination. Query services must enforce tenant scope. Large resource collections should prefer keyset or cursor pagination over deep offset pagination.
@@ -177,6 +192,8 @@ SQLAlchemy Unit of Work integration tests verify explicit commit, rollback-by-de
 
 Repository contract architecture tests verify that application-facing repository modules do not import SQLAlchemy or concrete persistence implementations, tenant-owned methods require non-optional `tenant_id`, global catalog contracts remain tenant-independent, repository contracts do not expose transaction or generic query methods, SQLAlchemy-facing types stay out of application signatures, collection methods use `Sequence`, and exported protocols define the expected signatures.
 
+Shared SQLAlchemy repository infrastructure tests verify base attach/flush behavior, commit and rollback behavior through `SQLAlchemyUnitOfWork`, session sharing, Unit of Work-owned closure, tenant-scoped lookup and cross-tenant misses, tenant predicate SQL shape, global catalog separation, opt-in locking SQL shape, and preservation of SQLAlchemy optimistic concurrency for versioned `Resource` rows.
+
 Future repository implementation issues must add integration tests proving tenant isolation, transaction behavior, no repository-level commits, error translation, relationship loading behavior, and query shape for critical paths.
 
 ## Accepted Trade-Offs
@@ -185,7 +202,7 @@ The project remains synchronous because the current engine, sessions, tests, and
 
 ## Deferred Concerns
 
-Deferred work includes concrete SQLAlchemy repository implementations, shared SQLAlchemy repository helpers, use-case services, DTO/result types, persistence error translation matrix, query services, pagination, temporal replacement behavior, merge execution, canonical traversal, query-count tests, retry policy, external transaction orchestration, and any future decision to introduce pure domain entities.
+Deferred work includes concrete SQLAlchemy repository implementations, Unit of Work repository properties, use-case services, DTO/result types, persistence error translation matrix, query services, pagination, temporal replacement behavior, merge execution, canonical traversal, query-count tests, retry policy, external transaction orchestration, and any future decision to introduce pure domain entities.
 
 ## Implementation Roadmap
 
