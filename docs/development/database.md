@@ -52,11 +52,27 @@ Application command workflows should use `app.persistence.sqlalchemy.SQLAlchemyU
 
 Shared internal repository primitives live under `app.persistence.sqlalchemy.repositories`. Concrete SQLAlchemy repositories should receive the active `SQLAlchemyUnitOfWork.session` by constructor injection or the small internal `bind_repository(...)` helper. Repositories must not create sessions or engines, commit, roll back, close the shared session, dispose the engine, or create independent transaction boundaries.
 
+Concrete Tenant and Organization adapters are available as `SQLAlchemyTenantRepository` and `SQLAlchemyOrganizationRepository` under `app.persistence.sqlalchemy.repositories`. `SQLAlchemyUnitOfWork` exposes them as `uow.tenants` and `uow.organizations` while the Unit of Work is active. Both repositories share the Unit of Work session and are unavailable before enter, after exit, and after the Unit of Work leaves the active state.
+
+```python
+from app.persistence.sqlalchemy import SQLAlchemyUnitOfWork
+
+with SQLAlchemyUnitOfWork() as uow:
+    tenant = uow.tenants.get_by_slug("example")
+    if tenant is not None:
+        children = uow.organizations.list_children(
+            tenant.id,
+            parent_organization_id,
+        )
+```
+
 The base repository supports only internal persistence operations: add an entity to the active session, explicitly flush pending work, explicitly refresh an entity, and evaluate prepared scalar, sequence, or existence statements. `add(...)` does not commit. `flush()` is available only for operations that need generated/default values, early constraint validation, or dependent writes; failed flushes remain part of the Unit of Work transaction and are cleaned up by Unit of Work rollback/exit behavior.
 
-Tenant-owned repository infrastructure uses helpers that require explicit `tenant_id` and apply tenant predicates centrally. Tenant-owned id lookup is always built with both `tenant_id` and entity `id`; there is no optional tenant scope, unscoped fallback, administrative bypass flag, or ambient tenant context. Global managed catalog repositories use the plain base infrastructure without tenant context.
+Tenant-owned repository infrastructure uses helpers that require explicit `tenant_id` and apply tenant predicates centrally. Tenant-owned id lookup is always built with both `tenant_id` and entity `id`; there is no optional tenant scope, unscoped fallback, administrative bypass flag, or ambient tenant context. `SQLAlchemyOrganizationRepository` applies tenant scope to id lookup, canonical-name lookup, external-key lookup, existence checks, and direct-child listing. Direct children are returned in stable `canonical_name, id` order. Global managed catalog repositories use the plain base infrastructure without tenant context and remain deferred.
 
 Loading and locking are explicit. Repository helpers may apply concrete loader options selected for a specific operation, but there is no blanket eager loading or include/expand framework. `SELECT ... FOR UPDATE` is opt-in through a helper and is not applied to normal reads. Optimistic concurrency remains model-specific: `resource.record_version` is mapped as SQLAlchemy's `version_id_col`, and repository infrastructure preserves normal `StaleDataError` behavior without translating or manually incrementing version columns.
+
+Repository errors propagate as original SQLAlchemy or database exceptions. Duplicate tenant slugs and duplicate non-null organization external keys within one tenant raise `IntegrityError` during flush or commit. Persistence error translation remains deferred.
 
 ## Migrations
 
