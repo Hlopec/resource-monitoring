@@ -4,6 +4,7 @@ from types import TracebackType
 from typing import Protocol, Self
 
 from app.application.ports.organizations import OrganizationRepository
+from app.application.ports.resources import ResourceRepository
 from app.application.ports.tenants import TenantRepository
 
 
@@ -19,6 +20,7 @@ class UnitOfWork(Protocol):
 
     tenants: TenantRepository
     organizations: OrganizationRepository
+    resources: ResourceRepository
 
     def __enter__(self) -> Self:
         """Open the Unit of Work and return the active instance."""

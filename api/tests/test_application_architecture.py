@@ -56,6 +56,7 @@ from app.models import (
 )
 from app.persistence.sqlalchemy.repositories import (
     SQLAlchemyOrganizationRepository,
+    SQLAlchemyResourceRepository,
     SQLAlchemyTenantRepository,
 )
 
@@ -78,6 +79,7 @@ FORBIDDEN_REPOSITORY_METHODS = {"commit", "rollback", "filter", "query", "execut
 CONCRETE_REPOSITORIES = (
     SQLAlchemyTenantRepository,
     SQLAlchemyOrganizationRepository,
+    SQLAlchemyResourceRepository,
 )
 TENANT_SCOPED_REPOSITORIES = (
     OrganizationRepository,
@@ -204,6 +206,7 @@ def test_unit_of_work_protocol_exposes_technology_neutral_repositories() -> None
 
     assert hints["tenants"] is TenantRepository
     assert hints["organizations"] is OrganizationRepository
+    assert hints["resources"] is ResourceRepository
 
 
 def test_repository_protocols_do_not_expose_optional_tenant_scope() -> None:

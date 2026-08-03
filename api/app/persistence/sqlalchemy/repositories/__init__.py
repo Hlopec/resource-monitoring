@@ -15,6 +15,7 @@ from app.persistence.sqlalchemy.repositories.helpers import (
 from app.persistence.sqlalchemy.repositories.organizations import (
     SQLAlchemyOrganizationRepository,
 )
+from app.persistence.sqlalchemy.repositories.resources import SQLAlchemyResourceRepository
 from app.persistence.sqlalchemy.repositories.tenant_scoped import (
     TenantScopedSQLAlchemyRepository,
 )
@@ -23,6 +24,7 @@ from app.persistence.sqlalchemy.repositories.tenants import SQLAlchemyTenantRepo
 __all__ = [
     "RepositoryT",
     "SQLAlchemyOrganizationRepository",
+    "SQLAlchemyResourceRepository",
     "SQLAlchemyRepository",
     "SQLAlchemyTenantRepository",
     "TenantScopedSQLAlchemyRepository",

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.persistence.sqlalchemy.repositories import (
     SQLAlchemyOrganizationRepository,
+    SQLAlchemyResourceRepository,
     SQLAlchemyTenantRepository,
 )
 
@@ -55,6 +56,7 @@ class SQLAlchemyUnitOfWork:
         self._session: Session | None = None
         self._tenants: SQLAlchemyTenantRepository | None = None
         self._organizations: SQLAlchemyOrganizationRepository | None = None
+        self._resources: SQLAlchemyResourceRepository | None = None
         self._state = _UnitOfWorkState.NEW
 
     def __enter__(self) -> SQLAlchemyUnitOfWork:
@@ -67,6 +69,7 @@ class SQLAlchemyUnitOfWork:
         self._state = _UnitOfWorkState.ACTIVE
         self._tenants = SQLAlchemyTenantRepository(self.session)
         self._organizations = SQLAlchemyOrganizationRepository(self.session)
+        self._resources = SQLAlchemyResourceRepository(self.session)
         return self
 
     def __exit__(
@@ -87,6 +90,7 @@ class SQLAlchemyUnitOfWork:
                 self._session = None
                 self._tenants = None
                 self._organizations = None
+                self._resources = None
                 self._state = _UnitOfWorkState.CLOSED
 
         return False
@@ -106,6 +110,14 @@ class SQLAlchemyUnitOfWork:
         if self._organizations is None:
             raise UnitOfWorkNotActiveError("Organization repository is not active")
         return self._organizations
+
+    @property
+    def resources(self) -> SQLAlchemyResourceRepository:
+        """Return the active resource repository."""
+        self.session
+        if self._resources is None:
+            raise UnitOfWorkNotActiveError("Resource repository is not active")
+        return self._resources
 
     @property
     def session(self) -> Session:
