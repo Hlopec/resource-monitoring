@@ -54,6 +54,10 @@ from app.models import (
     ResourceState,
     Tenant,
 )
+from app.persistence.sqlalchemy.repositories import (
+    SQLAlchemyOrganizationRepository,
+    SQLAlchemyTenantRepository,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 APPLICATION_ROOT = ROOT / "app" / "application"
@@ -71,6 +75,10 @@ SQLALCHEMY_TYPE_NAMES = {
     "Session",
 }
 FORBIDDEN_REPOSITORY_METHODS = {"commit", "rollback", "filter", "query", "execute"}
+CONCRETE_REPOSITORIES = (
+    SQLAlchemyTenantRepository,
+    SQLAlchemyOrganizationRepository,
+)
 TENANT_SCOPED_REPOSITORIES = (
     OrganizationRepository,
     ResourceRepository,
@@ -191,6 +199,13 @@ def test_unit_of_work_protocol_declares_lifecycle_methods() -> None:
     assert expected_methods.issubset(UnitOfWork.__dict__)
 
 
+def test_unit_of_work_protocol_exposes_technology_neutral_repositories() -> None:
+    hints = get_type_hints(UnitOfWork)
+
+    assert hints["tenants"] is TenantRepository
+    assert hints["organizations"] is OrganizationRepository
+
+
 def test_repository_protocols_do_not_expose_optional_tenant_scope() -> None:
     for protocol in (TenantScopedLookupRepository, *TENANT_SCOPED_REPOSITORIES):
         for name, member in inspect.getmembers(protocol, inspect.isfunction):
@@ -220,6 +235,13 @@ def test_repository_contracts_do_not_expose_transaction_or_generic_query_methods
                 parameter.kind is inspect.Parameter.VAR_KEYWORD
                 for parameter in signature.parameters.values()
             ), (protocol, name)
+
+
+def test_concrete_repositories_stay_in_persistence_and_do_not_expose_transactions() -> None:
+    for repository_type in CONCRETE_REPOSITORIES:
+        assert repository_type.__module__.startswith("app.persistence.sqlalchemy")
+        public_method_names = {name for name, _ in _public_methods(repository_type)}
+        assert {"commit", "rollback"}.isdisjoint(public_method_names)
 
 
 def test_application_facing_ports_do_not_reference_sqlalchemy_types() -> None:

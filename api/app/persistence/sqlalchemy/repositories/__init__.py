@@ -12,13 +12,19 @@ from app.persistence.sqlalchemy.repositories.helpers import (
     tenant_select,
     with_options,
 )
+from app.persistence.sqlalchemy.repositories.organizations import (
+    SQLAlchemyOrganizationRepository,
+)
 from app.persistence.sqlalchemy.repositories.tenant_scoped import (
     TenantScopedSQLAlchemyRepository,
 )
+from app.persistence.sqlalchemy.repositories.tenants import SQLAlchemyTenantRepository
 
 __all__ = [
     "RepositoryT",
+    "SQLAlchemyOrganizationRepository",
     "SQLAlchemyRepository",
+    "SQLAlchemyTenantRepository",
     "TenantScopedSQLAlchemyRepository",
     "apply_for_update",
     "bind_repository",

@@ -8,6 +8,11 @@ from types import TracebackType
 
 from sqlalchemy.orm import Session
 
+from app.persistence.sqlalchemy.repositories import (
+    SQLAlchemyOrganizationRepository,
+    SQLAlchemyTenantRepository,
+)
+
 SessionFactory = Callable[[], Session]
 
 
@@ -36,7 +41,7 @@ class SQLAlchemyUnitOfWork:
     """Single-use synchronous SQLAlchemy Unit of Work.
 
     The ``session`` property is a concrete persistence-facing escape hatch for
-    future SQLAlchemy repositories. It is intentionally not part of the
+    SQLAlchemy repositories. It is intentionally not part of the
     application-facing Unit of Work protocol.
     """
 
@@ -48,6 +53,8 @@ class SQLAlchemyUnitOfWork:
 
         self._session_factory = session_factory
         self._session: Session | None = None
+        self._tenants: SQLAlchemyTenantRepository | None = None
+        self._organizations: SQLAlchemyOrganizationRepository | None = None
         self._state = _UnitOfWorkState.NEW
 
     def __enter__(self) -> SQLAlchemyUnitOfWork:
@@ -58,6 +65,8 @@ class SQLAlchemyUnitOfWork:
 
         self._session = self._session_factory()
         self._state = _UnitOfWorkState.ACTIVE
+        self._tenants = SQLAlchemyTenantRepository(self.session)
+        self._organizations = SQLAlchemyOrganizationRepository(self.session)
         return self
 
     def __exit__(
@@ -76,9 +85,27 @@ class SQLAlchemyUnitOfWork:
             finally:
                 session.close()
                 self._session = None
+                self._tenants = None
+                self._organizations = None
                 self._state = _UnitOfWorkState.CLOSED
 
         return False
+
+    @property
+    def tenants(self) -> SQLAlchemyTenantRepository:
+        """Return the active tenant repository."""
+        self.session
+        if self._tenants is None:
+            raise UnitOfWorkNotActiveError("Tenant repository is not active")
+        return self._tenants
+
+    @property
+    def organizations(self) -> SQLAlchemyOrganizationRepository:
+        """Return the active organization repository."""
+        self.session
+        if self._organizations is None:
+            raise UnitOfWorkNotActiveError("Organization repository is not active")
+        return self._organizations
 
     @property
     def session(self) -> Session:

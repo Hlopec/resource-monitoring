@@ -3,6 +3,9 @@
 from types import TracebackType
 from typing import Protocol, Self
 
+from app.application.ports.organizations import OrganizationRepository
+from app.application.ports.tenants import TenantRepository
+
 
 class UnitOfWork(Protocol):
     """Transactional boundary owned by one application command or use case.
@@ -13,6 +16,9 @@ class UnitOfWork(Protocol):
     Repository instances exposed by a concrete Unit of Work share its session and
     must not commit independently.
     """
+
+    tenants: TenantRepository
+    organizations: OrganizationRepository
 
     def __enter__(self) -> Self:
         """Open the Unit of Work and return the active instance."""
