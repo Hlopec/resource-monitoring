@@ -22,9 +22,11 @@ from app.persistence.sqlalchemy.repositories import (
     SQLAlchemyClassificationValueRepository,
     SQLAlchemyManagedCatalogRepository,
     SQLAlchemyOrganizationRepository,
+    SQLAlchemyResourceAliasRepository,
     SQLAlchemyResourceClassificationRepository,
     SQLAlchemyResourceIdentifierRepository,
     SQLAlchemyResourceLabelRepository,
+    SQLAlchemyResourceMergeRepository,
     SQLAlchemyResourceOwnershipRepository,
     SQLAlchemyResourceRelationshipRepository,
     SQLAlchemyResourceRepository,
@@ -104,6 +106,8 @@ class SQLAlchemyUnitOfWork:
         ) = None
         self._resource_labels: SQLAlchemyResourceLabelRepository | None = None
         self._resource_states: SQLAlchemyResourceStateRepository | None = None
+        self._resource_aliases: SQLAlchemyResourceAliasRepository | None = None
+        self._resource_merges: SQLAlchemyResourceMergeRepository | None = None
         self._state = _UnitOfWorkState.NEW
 
     def __enter__(self) -> SQLAlchemyUnitOfWork:
@@ -162,6 +166,8 @@ class SQLAlchemyUnitOfWork:
         )
         self._resource_labels = SQLAlchemyResourceLabelRepository(self.session)
         self._resource_states = SQLAlchemyResourceStateRepository(self.session)
+        self._resource_aliases = SQLAlchemyResourceAliasRepository(self.session)
+        self._resource_merges = SQLAlchemyResourceMergeRepository(self.session)
         return self
 
     def __exit__(
@@ -198,6 +204,8 @@ class SQLAlchemyUnitOfWork:
                 self._resource_classifications = None
                 self._resource_labels = None
                 self._resource_states = None
+                self._resource_aliases = None
+                self._resource_merges = None
                 self._state = _UnitOfWorkState.CLOSED
 
         return False
@@ -355,6 +363,22 @@ class SQLAlchemyUnitOfWork:
         if self._resource_states is None:
             raise UnitOfWorkNotActiveError("Resource state repository is not active")
         return self._resource_states
+
+    @property
+    def resource_aliases(self) -> SQLAlchemyResourceAliasRepository:
+        """Return the active resource alias repository."""
+        self.session
+        if self._resource_aliases is None:
+            raise UnitOfWorkNotActiveError("Resource alias repository is not active")
+        return self._resource_aliases
+
+    @property
+    def resource_merges(self) -> SQLAlchemyResourceMergeRepository:
+        """Return the active resource merge repository."""
+        self.session
+        if self._resource_merges is None:
+            raise UnitOfWorkNotActiveError("Resource merge repository is not active")
+        return self._resource_merges
 
     @property
     def session(self) -> Session:
