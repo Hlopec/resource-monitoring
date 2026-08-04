@@ -66,7 +66,7 @@ api/app/persistence/
 
 Shared SQLAlchemy repository infrastructure lives in `app.persistence.sqlalchemy.repositories`. It is an internal adapter package, not an application-facing contract package. `base.py` contains the session-bound base repository and direct binding helper, `tenant_scoped.py` contains tenant-owned repository primitives, and `helpers.py` contains small typed statement helpers for entity lookup, tenant-scoped lookup, explicit loader options, and opt-in `SELECT ... FOR UPDATE`.
 
-The first concrete adapters are `SQLAlchemyTenantRepository` in `repositories/tenants.py`, `SQLAlchemyOrganizationRepository` in `repositories/organizations.py`, and `SQLAlchemyResourceRepository` in `repositories/resources.py`. They implement the application-facing `TenantRepository`, `OrganizationRepository`, and `ResourceRepository` protocols while remaining inside the SQLAlchemy persistence boundary.
+The first concrete adapters are `SQLAlchemyTenantRepository` in `repositories/tenants.py`, `SQLAlchemyOrganizationRepository` in `repositories/organizations.py`, `SQLAlchemyResourceRepository` in `repositories/resources.py`, and the managed catalog adapters in `repositories/catalogs.py`. They implement application-facing protocols while remaining inside the SQLAlchemy persistence boundary.
 
 ## Repository Contract Conventions
 
@@ -99,7 +99,7 @@ Singular lookups return `Entity | None`. Collection methods return `Sequence[Ent
 
 Tenant is the scope root, so `TenantRepository` does not require a separate tenant context. Tenant-owned repositories require explicit `tenant_id` for all read/access methods. `add(entity)` methods rely on the entity's own tenant fields and still run inside the caller's Unit of Work. Cross-tenant misses must remain indistinguishable from ordinary not-found results.
 
-Global managed catalog repositories deliberately do not accept `tenant_id`; `resource_type`, `identifier_type`, `relationship_type`, `ownership_role`, `classification_type`, `classification_value`, `lifecycle_status`, `criticality`, and `exposure_level` remain global managed catalogs.
+Global managed catalog repositories deliberately do not accept `tenant_id`; `resource_type`, `identifier_type`, `relationship_type`, `ownership_role`, `classification_type`, `classification_value`, `lifecycle_status`, `criticality`, and `exposure_level` remain global managed catalogs. `SQLAlchemyManagedCatalogRepository` is a small typed adapter for `ResourceType`, `IdentifierType`, `RelationshipType`, `OwnershipRole`, `ClassificationType`, `LifecycleStatus`, `Criticality`, and `ExposureLevel`. `SQLAlchemyClassificationValueRepository` is specialized because value lookup is scoped by `classification_type_id`.
 
 The resource aggregate contract includes `get_for_update(...)` to reserve a place for explicit concurrent mutation workflows. It does not expose SQLAlchemy lock expressions. Identifier-based resource matching belongs to `ResourceIdentifierRepository`; canonical merge traversal belongs to later merge/query service work and is not exposed on `ResourceRepository` in this stage.
 
@@ -107,9 +107,9 @@ Temporal fact repositories expose current/history lookup boundaries and `add(...
 
 Alias and merge contracts expose alias resolution and merge-lineage persistence only. They do not implement merge execution, canonical traversal, alias transfer, deduplication, or conflict-resolution workflows.
 
-Repository contracts are exposed through the application-facing Unit of Work protocol where concrete adapters now exist. The current neutral properties are `tenants: TenantRepository`, `organizations: OrganizationRepository`, and `resources: ResourceRepository`; they import only application-facing protocols and do not expose SQLAlchemy types. Future repository properties should be added as their concrete adapters are implemented.
+Repository contracts are exposed through the application-facing Unit of Work protocol where concrete adapters now exist. The current neutral properties are `tenants: TenantRepository`, `organizations: OrganizationRepository`, `resources: ResourceRepository`, `resource_types: ManagedCatalogRepository[ResourceType]`, `identifier_types: ManagedCatalogRepository[IdentifierType]`, `relationship_types: ManagedCatalogRepository[RelationshipType]`, `ownership_roles: ManagedCatalogRepository[OwnershipRole]`, `classification_types: ManagedCatalogRepository[ClassificationType]`, `classification_values: ClassificationValueRepository`, `lifecycle_statuses: ManagedCatalogRepository[LifecycleStatus]`, `criticalities: ManagedCatalogRepository[Criticality]`, and `exposure_levels: ManagedCatalogRepository[ExposureLevel]`; they import only application-facing protocols and models and do not expose SQLAlchemy types. Future repository properties should be added as their concrete adapters are implemented.
 
-The shared SQLAlchemy base repository exposes only internal primitives: attach an entity to the injected session, explicitly flush pending work, explicitly refresh an entity, evaluate prepared scalar or sequence statements, and test existence through a prepared statement. It deliberately does not expose a public generic CRUD interface, unrestricted `filter(**kwargs)`, generic query execution, destructive delete helpers, or transaction control. Concrete repositories own domain-specific methods such as tenant slug lookup; organization canonical-name, external-key, existence, and child-listing lookups; and resource id, canonical-name, existence, and explicit lock-oriented lookups. Label, catalog, temporal, and lineage lookups remain deferred.
+The shared SQLAlchemy base repository exposes only internal primitives: attach an entity to the injected session, explicitly flush pending work, explicitly refresh an entity, evaluate prepared scalar or sequence statements, and test existence through a prepared statement. It deliberately does not expose a public generic CRUD interface, unrestricted `filter(**kwargs)`, generic query execution, destructive delete helpers, or transaction control. Concrete repositories own domain-specific methods such as tenant slug lookup; organization canonical-name, external-key, existence, and child-listing lookups; resource id, canonical-name, existence, and explicit lock-oriented lookups; and read-only managed catalog lookup. Label, temporal, and lineage lookups remain deferred.
 
 ## Unit of Work Semantics
 
@@ -136,7 +136,18 @@ The concrete `session` property is infrastructure-facing and available only whil
 
 `SQLAlchemyUnitOfWork` accepts an injectable synchronous session factory. Production wiring uses the shared `SessionLocal` configured from the application engine. Tests inject their own isolated `sessionmaker` bound to the test engine. A Unit of Work creates exactly one session from the factory, closes that session on exit, and does not dispose the shared engine.
 
-`SQLAlchemyUnitOfWork` constructs `SQLAlchemyTenantRepository`, `SQLAlchemyOrganizationRepository`, and `SQLAlchemyResourceRepository` when `__enter__()` opens the session. `uow.tenants`, `uow.organizations`, and `uow.resources` are available only while the Unit of Work is active, share the same session, and are cleared on exit. SQLAlchemy repositories may also be constructed directly with an active session for focused tests or low-level integration. They do not create sessions, engines, nested transactions, or repository-owned transaction boundaries. Repository instances are scoped to that Unit of Work lifetime and are not safe to reuse after the Unit of Work closes.
+`SQLAlchemyUnitOfWork` constructs `SQLAlchemyTenantRepository`, `SQLAlchemyOrganizationRepository`, `SQLAlchemyResourceRepository`, one `SQLAlchemyManagedCatalogRepository` per global managed catalog, and one `SQLAlchemyClassificationValueRepository` when `__enter__()` opens the session. `uow.tenants`, `uow.organizations`, `uow.resources`, `uow.resource_types`, `uow.identifier_types`, `uow.relationship_types`, `uow.ownership_roles`, `uow.classification_types`, `uow.classification_values`, `uow.lifecycle_statuses`, `uow.criticalities`, and `uow.exposure_levels` are available only while the Unit of Work is active, share the same session, and are cleared on exit. SQLAlchemy repositories may also be constructed directly with an active session for focused tests or low-level integration. They do not create sessions, engines, nested transactions, or repository-owned transaction boundaries. Repository instances are scoped to that Unit of Work lifetime and are not safe to reuse after the Unit of Work closes.
+
+Catalog lookup remains read-only at the application boundary:
+
+```python
+with SQLAlchemyUnitOfWork() as uow:
+    resource_type = uow.resource_types.get_by_code("domain")
+    lifecycle = uow.lifecycle_statuses.get_by_code("active")
+    values = uow.classification_values.list_active_for_type(
+        classification_type_id,
+    )
+```
 
 ## Transaction Ownership
 
@@ -154,7 +165,9 @@ Tenant-owned repository methods require explicit tenant context. Lookups by enti
 
 SQLAlchemy implementations must apply tenant predicates even when PostgreSQL composite foreign keys also enforce integrity. Cross-tenant misses return the same application-facing result as absent rows. Future global administrative access must use separate explicit contracts. Every future concrete repository issue must include tenant-isolation tests.
 
-Tenant-scoped repository infrastructure requires explicit `tenant_id` for tenant-owned statement construction and entity lookup. The shared `tenant_select(...)` and `tenant_entity_select(...)` helpers centralize the tenant predicate; tenant-owned id lookup always includes both `tenant_id` and entity `id`. There is no `tenant_id=None` default, no ambient tenant scope, no `ignore_tenant` bypass flag, and no unscoped fallback helper on the tenant-scoped base. Global catalog repositories use the plain base repository and are not forced through tenant-scoped infrastructure.
+Tenant-scoped repository infrastructure requires explicit `tenant_id` for tenant-owned statement construction and entity lookup. The shared `tenant_select(...)` and `tenant_entity_select(...)` helpers centralize the tenant predicate; tenant-owned id lookup always includes both `tenant_id` and entity `id`. There is no `tenant_id=None` default, no ambient tenant scope, no `ignore_tenant` bypass flag, and no unscoped fallback helper on the tenant-scoped base. Global catalog repositories use `entity_select(...)` for primary-key lookup and direct SQLAlchemy 2.x statements for code and active-list lookups without tenant-scoped infrastructure.
+
+All current managed catalog models use `code` and `is_active`; none define `sort_order`. Active-list methods therefore filter on `is_active IS true` and order by `code, id`. Classification-value active lists also filter by `classification_type_id`, exclude values from other types, and use the same `code, id` ordering within the type. Seeded rows are read through these repositories by their deterministic codes and UUIDs; the adapters do not duplicate seed data, alter seed codes, or expose catalog mutation.
 
 `SQLAlchemyOrganizationRepository` applies tenant scope to every read: id lookup, canonical-name lookup, external-key lookup, existence checks, and direct-child listing. Cross-tenant misses return the same `None`, `False`, or empty sequence shape as ordinary misses. Direct children are ordered by `canonical_name` and `id` so callers never rely on unspecified database row order.
 
@@ -209,6 +222,8 @@ Tenant and Organization repository tests verify protocol compatibility, injected
 
 Resource repository tests verify protocol compatibility, injected-session usage, tenant-scoped id and canonical-name lookups, non-locking normal reads, explicit `FOR UPDATE` lookup, Resource optimistic concurrency through SQLAlchemy `record_version`, Unit of Work resource lifecycle, and Tenant/Organization/Resource atomicity.
 
+Managed catalog repository tests verify protocol compatibility, injected-session usage, seeded id/code lookup, missing id/code lookup, global no-tenant access, active filtering, deterministic ordering, classification-value type scoping, Unit of Work lifecycle, shared sessions, distinct Unit of Work instances, and read-only concrete adapter surfaces.
+
 Future repository implementation issues must add integration tests proving tenant isolation, transaction behavior, no repository-level commits, error translation, relationship loading behavior, and query shape for critical paths.
 
 ## Accepted Trade-Offs
@@ -217,7 +232,7 @@ The project remains synchronous because the current engine, sessions, tests, and
 
 ## Deferred Concerns
 
-Deferred work includes Label, catalog, temporal, alias, and merge SQLAlchemy repository implementations; additional Unit of Work repository properties; use-case services; DTO/result types; persistence error translation matrix; query services; pagination; temporal replacement behavior; merge execution; canonical traversal; query-count tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities.
+Deferred work includes Label, temporal, alias, and merge SQLAlchemy repository implementations; catalog mutation and catalog administration services; labels; temporal fact replacement services; lineage services; additional use-case services; DTO/result types; persistence error translation matrix; query services; pagination; merge execution; canonical traversal; query-count tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities.
 
 ## Implementation Roadmap
 
@@ -226,11 +241,12 @@ Deferred work includes Label, catalog, temporal, alias, and merge SQLAlchemy rep
 3. `03.0.4` — Implement Shared SQLAlchemy Repository Infrastructure
 4. `03.0.5` — Implement Tenant and Organization Repositories
 5. `03.0.6` — Implement Resource Repository
-6. `03.0.7` — Implement Temporal Fact Persistence
-7. `03.0.8` — Implement Alias and Merge Persistence
-8. `03.0.9` — Implement Resource Lifecycle Application Services
-9. `03.0.10` — Introduce Application DTOs and Result Types
-10. `03.0.11` — Implement Persistence Error Translation
-11. `03.0.12` — Implement Query Services and Pagination
-12. `03.0.13` — Harden Persistence Integration Tests
-13. `03.0.14` — Audit Application Core and Persistence Architecture
+6. `03.0.7` — Implement Managed Catalog SQLAlchemy Repositories
+7. `03.0.8` — Implement Temporal Fact Persistence
+8. `03.0.9` — Implement Alias and Merge Persistence
+9. `03.0.10` — Implement Resource Lifecycle Application Services
+10. `03.0.11` — Introduce Application DTOs and Result Types
+11. `03.0.12` — Implement Persistence Error Translation
+12. `03.0.13` — Implement Query Services and Pagination
+13. `03.0.14` — Harden Persistence Integration Tests
+14. `03.0.15` — Audit Application Core and Persistence Architecture

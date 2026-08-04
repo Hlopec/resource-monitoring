@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import ast
 import inspect
-from pathlib import Path
 from collections.abc import Sequence
+from pathlib import Path
 from typing import get_args, get_origin, get_type_hints
 from uuid import UUID
 
@@ -41,8 +41,16 @@ from app.application.ports.temporal import (
 from app.application.ports.tenants import TenantRepository
 from app.application.ports.unit_of_work import UnitOfWork
 from app.models import (
+    ClassificationType,
+    ClassificationValue,
+    Criticality,
+    ExposureLevel,
+    IdentifierType,
     Label,
+    LifecycleStatus,
     Organization,
+    OwnershipRole,
+    RelationshipType,
     Resource,
     ResourceAlias,
     ResourceClassification,
@@ -52,9 +60,12 @@ from app.models import (
     ResourceOwnership,
     ResourceRelationship,
     ResourceState,
+    ResourceType,
     Tenant,
 )
 from app.persistence.sqlalchemy.repositories import (
+    SQLAlchemyClassificationValueRepository,
+    SQLAlchemyManagedCatalogRepository,
     SQLAlchemyOrganizationRepository,
     SQLAlchemyResourceRepository,
     SQLAlchemyTenantRepository,
@@ -76,10 +87,21 @@ SQLALCHEMY_TYPE_NAMES = {
     "Session",
 }
 FORBIDDEN_REPOSITORY_METHODS = {"commit", "rollback", "filter", "query", "execute"}
+FORBIDDEN_READ_ONLY_CATALOG_METHODS = FORBIDDEN_REPOSITORY_METHODS | {
+    "add",
+    "delete",
+    "remove",
+    "update",
+    "create",
+    "save",
+    "flush",
+}
 CONCRETE_REPOSITORIES = (
     SQLAlchemyTenantRepository,
     SQLAlchemyOrganizationRepository,
     SQLAlchemyResourceRepository,
+    SQLAlchemyManagedCatalogRepository,
+    SQLAlchemyClassificationValueRepository,
 )
 TENANT_SCOPED_REPOSITORIES = (
     OrganizationRepository,
@@ -207,6 +229,15 @@ def test_unit_of_work_protocol_exposes_technology_neutral_repositories() -> None
     assert hints["tenants"] is TenantRepository
     assert hints["organizations"] is OrganizationRepository
     assert hints["resources"] is ResourceRepository
+    assert hints["resource_types"] == ManagedCatalogRepository[ResourceType]
+    assert hints["identifier_types"] == ManagedCatalogRepository[IdentifierType]
+    assert hints["relationship_types"] == ManagedCatalogRepository[RelationshipType]
+    assert hints["ownership_roles"] == ManagedCatalogRepository[OwnershipRole]
+    assert hints["classification_types"] == ManagedCatalogRepository[ClassificationType]
+    assert hints["classification_values"] is ClassificationValueRepository
+    assert hints["lifecycle_statuses"] == ManagedCatalogRepository[LifecycleStatus]
+    assert hints["criticalities"] == ManagedCatalogRepository[Criticality]
+    assert hints["exposure_levels"] == ManagedCatalogRepository[ExposureLevel]
 
 
 def test_repository_protocols_do_not_expose_optional_tenant_scope() -> None:
@@ -245,6 +276,16 @@ def test_concrete_repositories_stay_in_persistence_and_do_not_expose_transaction
         assert repository_type.__module__.startswith("app.persistence.sqlalchemy")
         public_method_names = {name for name, _ in _public_methods(repository_type)}
         assert {"commit", "rollback"}.isdisjoint(public_method_names)
+
+
+def test_concrete_catalog_adapters_keep_read_only_public_surface() -> None:
+    for repository_type in (
+        SQLAlchemyManagedCatalogRepository,
+        SQLAlchemyClassificationValueRepository,
+    ):
+        assert repository_type.__module__.startswith("app.persistence.sqlalchemy")
+        public_method_names = {name for name, _ in _public_methods(repository_type)}
+        assert FORBIDDEN_READ_ONLY_CATALOG_METHODS.isdisjoint(public_method_names)
 
 
 def test_application_facing_ports_do_not_reference_sqlalchemy_types() -> None:
@@ -290,6 +331,11 @@ def test_repository_protocols_define_expected_signatures() -> None:
     expected_returns = {
         (TenantRepository, "get_by_id"): Tenant | None,
         (TenantRepository, "get_by_slug"): Tenant | None,
+        (ClassificationValueRepository, "get_by_id"): ClassificationValue | None,
+        (
+            ClassificationValueRepository,
+            "get_by_type_and_code",
+        ): ClassificationValue | None,
         (OrganizationRepository, "get_by_id"): Organization | None,
         (ResourceRepository, "get_by_id"): Resource | None,
         (ResourceRepository, "get_for_update"): Resource | None,

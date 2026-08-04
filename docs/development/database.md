@@ -52,7 +52,7 @@ Application command workflows should use `app.persistence.sqlalchemy.SQLAlchemyU
 
 Shared internal repository primitives live under `app.persistence.sqlalchemy.repositories`. Concrete SQLAlchemy repositories should receive the active `SQLAlchemyUnitOfWork.session` by constructor injection or the small internal `bind_repository(...)` helper. Repositories must not create sessions or engines, commit, roll back, close the shared session, dispose the engine, or create independent transaction boundaries.
 
-Concrete Tenant, Organization, and Resource adapters are available as `SQLAlchemyTenantRepository`, `SQLAlchemyOrganizationRepository`, and `SQLAlchemyResourceRepository` under `app.persistence.sqlalchemy.repositories`. `SQLAlchemyUnitOfWork` exposes them as `uow.tenants`, `uow.organizations`, and `uow.resources` while the Unit of Work is active. These repositories share the Unit of Work session and are unavailable before enter, after exit, and after the Unit of Work leaves the active state.
+Concrete Tenant, Organization, Resource, and managed catalog adapters are available under `app.persistence.sqlalchemy.repositories`. `SQLAlchemyUnitOfWork` exposes `uow.tenants`, `uow.organizations`, `uow.resources`, `uow.resource_types`, `uow.identifier_types`, `uow.relationship_types`, `uow.ownership_roles`, `uow.classification_types`, `uow.classification_values`, `uow.lifecycle_statuses`, `uow.criticalities`, and `uow.exposure_levels` while the Unit of Work is active. These repositories share the Unit of Work session and are unavailable before enter, after exit, and after the Unit of Work leaves the active state.
 
 ```python
 from app.persistence.sqlalchemy import SQLAlchemyUnitOfWork
@@ -79,9 +79,22 @@ with SQLAlchemyUnitOfWork() as uow:
         uow.commit()
 ```
 
+```python
+from app.persistence.sqlalchemy import SQLAlchemyUnitOfWork
+
+with SQLAlchemyUnitOfWork() as uow:
+    resource_type = uow.resource_types.get_by_code("domain")
+    lifecycle = uow.lifecycle_statuses.get_by_code("active")
+    values = uow.classification_values.list_active_for_type(
+        classification_type_id,
+    )
+```
+
 The base repository supports only internal persistence operations: add an entity to the active session, explicitly flush pending work, explicitly refresh an entity, and evaluate prepared scalar, sequence, or existence statements. `add(...)` does not commit. `flush()` is available only for operations that need generated/default values, early constraint validation, or dependent writes; failed flushes remain part of the Unit of Work transaction and are cleaned up by Unit of Work rollback/exit behavior.
 
-Tenant-owned repository infrastructure uses helpers that require explicit `tenant_id` and apply tenant predicates centrally. Tenant-owned id lookup is always built with both `tenant_id` and entity `id`; there is no optional tenant scope, unscoped fallback, administrative bypass flag, or ambient tenant context. `SQLAlchemyOrganizationRepository` applies tenant scope to id lookup, canonical-name lookup, external-key lookup, existence checks, and direct-child listing. `SQLAlchemyResourceRepository` applies tenant scope to id lookup, canonical-name lookup, existence checks, and explicit lock-oriented lookup. Direct organization children are returned in stable `canonical_name, id` order. Resource canonical names are not currently unique, so canonical-name lookup uses stable `canonical_name, id` scalar ordering. Global managed catalog repositories use the plain base infrastructure without tenant context and remain deferred.
+Tenant-owned repository infrastructure uses helpers that require explicit `tenant_id` and apply tenant predicates centrally. Tenant-owned id lookup is always built with both `tenant_id` and entity `id`; there is no optional tenant scope, unscoped fallback, administrative bypass flag, or ambient tenant context. `SQLAlchemyOrganizationRepository` applies tenant scope to id lookup, canonical-name lookup, external-key lookup, existence checks, and direct-child listing. `SQLAlchemyResourceRepository` applies tenant scope to id lookup, canonical-name lookup, existence checks, and explicit lock-oriented lookup. Direct organization children are returned in stable `canonical_name, id` order. Resource canonical names are not currently unique, so canonical-name lookup uses stable `canonical_name, id` scalar ordering.
+
+Managed catalog repositories are global and non-tenant-scoped. `SQLAlchemyManagedCatalogRepository` supports read-only id lookup, exact code lookup, and active listing for `ResourceType`, `IdentifierType`, `RelationshipType`, `OwnershipRole`, `ClassificationType`, `LifecycleStatus`, `Criticality`, and `ExposureLevel`. `SQLAlchemyClassificationValueRepository` supports read-only id lookup, type-and-code lookup, and active listing by `classification_type_id`. All current catalog models use `is_active`; active lists filter on that column and order by `code, id` because no catalog table currently has `sort_order`. The adapters do not expose `add`, `flush`, commit, rollback, generic filtering, pagination, or catalog administration behavior.
 
 Loading and locking are explicit. Repository helpers may apply concrete loader options selected for a specific operation, but there is no blanket eager loading or include/expand framework. `SELECT ... FOR UPDATE` is opt-in through `SQLAlchemyResourceRepository.get_for_update(...)` and is not applied to normal resource reads. Optimistic concurrency remains model-specific: `resource.record_version` is mapped as SQLAlchemy's `version_id_col`, and repository infrastructure preserves normal `StaleDataError` behavior without translating or manually incrementing version columns.
 
@@ -295,6 +308,7 @@ Run:
 The seed inserts only a minimal baseline for managed reference catalogs. It is idempotent, deterministic by catalog `code`, and does not overwrite existing catalog rows.
 If a seeded system catalog `code` already exists with a different deterministic UUID, the seed exits with a clear conflict error instead of creating a duplicate or silently accepting the mismatch. Inserts use PostgreSQL conflict handling so concurrent seed runs do not create duplicate rows.
 Baseline seed data now includes lifecycle statuses (`active`, `inactive`, `archived`), criticalities (`low`, `medium`, `high`, `critical`), and exposure levels (`internal`, `restricted`, `public`).
+Seeded catalog rows are retrievable through the managed catalog Unit of Work properties by deterministic code. Classification values are retrieved through `uow.classification_values` with both `classification_type_id` and value `code`; there is no fallback across classification types.
 
 ## Tests
 
