@@ -22,7 +22,13 @@ from app.persistence.sqlalchemy.repositories import (
     SQLAlchemyClassificationValueRepository,
     SQLAlchemyManagedCatalogRepository,
     SQLAlchemyOrganizationRepository,
+    SQLAlchemyResourceClassificationRepository,
+    SQLAlchemyResourceIdentifierRepository,
+    SQLAlchemyResourceLabelRepository,
+    SQLAlchemyResourceOwnershipRepository,
+    SQLAlchemyResourceRelationshipRepository,
     SQLAlchemyResourceRepository,
+    SQLAlchemyResourceStateRepository,
     SQLAlchemyTenantRepository,
 )
 
@@ -90,6 +96,14 @@ class SQLAlchemyUnitOfWork:
         self._exposure_levels: (
             SQLAlchemyManagedCatalogRepository[ExposureLevel] | None
         ) = None
+        self._resource_identifiers: SQLAlchemyResourceIdentifierRepository | None = None
+        self._resource_ownerships: SQLAlchemyResourceOwnershipRepository | None = None
+        self._resource_relationships: SQLAlchemyResourceRelationshipRepository | None = None
+        self._resource_classifications: (
+            SQLAlchemyResourceClassificationRepository | None
+        ) = None
+        self._resource_labels: SQLAlchemyResourceLabelRepository | None = None
+        self._resource_states: SQLAlchemyResourceStateRepository | None = None
         self._state = _UnitOfWorkState.NEW
 
     def __enter__(self) -> SQLAlchemyUnitOfWork:
@@ -138,6 +152,16 @@ class SQLAlchemyUnitOfWork:
             self.session,
             ExposureLevel,
         )
+        self._resource_identifiers = SQLAlchemyResourceIdentifierRepository(self.session)
+        self._resource_ownerships = SQLAlchemyResourceOwnershipRepository(self.session)
+        self._resource_relationships = SQLAlchemyResourceRelationshipRepository(
+            self.session
+        )
+        self._resource_classifications = SQLAlchemyResourceClassificationRepository(
+            self.session
+        )
+        self._resource_labels = SQLAlchemyResourceLabelRepository(self.session)
+        self._resource_states = SQLAlchemyResourceStateRepository(self.session)
         return self
 
     def __exit__(
@@ -168,6 +192,12 @@ class SQLAlchemyUnitOfWork:
                 self._lifecycle_statuses = None
                 self._criticalities = None
                 self._exposure_levels = None
+                self._resource_identifiers = None
+                self._resource_ownerships = None
+                self._resource_relationships = None
+                self._resource_classifications = None
+                self._resource_labels = None
+                self._resource_states = None
                 self._state = _UnitOfWorkState.CLOSED
 
         return False
@@ -273,6 +303,58 @@ class SQLAlchemyUnitOfWork:
         if self._exposure_levels is None:
             raise UnitOfWorkNotActiveError("Exposure level repository is not active")
         return self._exposure_levels
+
+    @property
+    def resource_identifiers(self) -> SQLAlchemyResourceIdentifierRepository:
+        """Return the active resource identifier repository."""
+        self.session
+        if self._resource_identifiers is None:
+            raise UnitOfWorkNotActiveError("Resource identifier repository is not active")
+        return self._resource_identifiers
+
+    @property
+    def resource_ownerships(self) -> SQLAlchemyResourceOwnershipRepository:
+        """Return the active resource ownership repository."""
+        self.session
+        if self._resource_ownerships is None:
+            raise UnitOfWorkNotActiveError("Resource ownership repository is not active")
+        return self._resource_ownerships
+
+    @property
+    def resource_relationships(self) -> SQLAlchemyResourceRelationshipRepository:
+        """Return the active resource relationship repository."""
+        self.session
+        if self._resource_relationships is None:
+            raise UnitOfWorkNotActiveError(
+                "Resource relationship repository is not active"
+            )
+        return self._resource_relationships
+
+    @property
+    def resource_classifications(self) -> SQLAlchemyResourceClassificationRepository:
+        """Return the active resource classification repository."""
+        self.session
+        if self._resource_classifications is None:
+            raise UnitOfWorkNotActiveError(
+                "Resource classification repository is not active"
+            )
+        return self._resource_classifications
+
+    @property
+    def resource_labels(self) -> SQLAlchemyResourceLabelRepository:
+        """Return the active resource label repository."""
+        self.session
+        if self._resource_labels is None:
+            raise UnitOfWorkNotActiveError("Resource label repository is not active")
+        return self._resource_labels
+
+    @property
+    def resource_states(self) -> SQLAlchemyResourceStateRepository:
+        """Return the active resource state repository."""
+        self.session
+        if self._resource_states is None:
+            raise UnitOfWorkNotActiveError("Resource state repository is not active")
+        return self._resource_states
 
     @property
     def session(self) -> Session:

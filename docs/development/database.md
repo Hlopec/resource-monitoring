@@ -52,7 +52,7 @@ Application command workflows should use `app.persistence.sqlalchemy.SQLAlchemyU
 
 Shared internal repository primitives live under `app.persistence.sqlalchemy.repositories`. Concrete SQLAlchemy repositories should receive the active `SQLAlchemyUnitOfWork.session` by constructor injection or the small internal `bind_repository(...)` helper. Repositories must not create sessions or engines, commit, roll back, close the shared session, dispose the engine, or create independent transaction boundaries.
 
-Concrete Tenant, Organization, Resource, and managed catalog adapters are available under `app.persistence.sqlalchemy.repositories`. `SQLAlchemyUnitOfWork` exposes `uow.tenants`, `uow.organizations`, `uow.resources`, `uow.resource_types`, `uow.identifier_types`, `uow.relationship_types`, `uow.ownership_roles`, `uow.classification_types`, `uow.classification_values`, `uow.lifecycle_statuses`, `uow.criticalities`, and `uow.exposure_levels` while the Unit of Work is active. These repositories share the Unit of Work session and are unavailable before enter, after exit, and after the Unit of Work leaves the active state.
+Concrete Tenant, Organization, Resource, managed catalog, and temporal fact adapters are available under `app.persistence.sqlalchemy.repositories`. `SQLAlchemyUnitOfWork` exposes `uow.tenants`, `uow.organizations`, `uow.resources`, `uow.resource_types`, `uow.identifier_types`, `uow.relationship_types`, `uow.ownership_roles`, `uow.classification_types`, `uow.classification_values`, `uow.lifecycle_statuses`, `uow.criticalities`, `uow.exposure_levels`, `uow.resource_identifiers`, `uow.resource_ownerships`, `uow.resource_relationships`, `uow.resource_classifications`, `uow.resource_labels`, and `uow.resource_states` while the Unit of Work is active. These repositories share the Unit of Work session and are unavailable before enter, after exit, and after the Unit of Work leaves the active state.
 
 ```python
 from app.persistence.sqlalchemy import SQLAlchemyUnitOfWork
@@ -90,11 +90,29 @@ with SQLAlchemyUnitOfWork() as uow:
     )
 ```
 
+```python
+from app.persistence.sqlalchemy import SQLAlchemyUnitOfWork
+
+with SQLAlchemyUnitOfWork() as uow:
+    current_state = uow.resource_states.get_current(
+        tenant_id,
+        resource_id,
+    )
+    history = uow.resource_states.list_history(
+        tenant_id,
+        resource_id,
+    )
+```
+
 The base repository supports only internal persistence operations: add an entity to the active session, explicitly flush pending work, explicitly refresh an entity, and evaluate prepared scalar, sequence, or existence statements. `add(...)` does not commit. `flush()` is available only for operations that need generated/default values, early constraint validation, or dependent writes; failed flushes remain part of the Unit of Work transaction and are cleaned up by Unit of Work rollback/exit behavior.
 
 Tenant-owned repository infrastructure uses helpers that require explicit `tenant_id` and apply tenant predicates centrally. Tenant-owned id lookup is always built with both `tenant_id` and entity `id`; there is no optional tenant scope, unscoped fallback, administrative bypass flag, or ambient tenant context. `SQLAlchemyOrganizationRepository` applies tenant scope to id lookup, canonical-name lookup, external-key lookup, existence checks, and direct-child listing. `SQLAlchemyResourceRepository` applies tenant scope to id lookup, canonical-name lookup, existence checks, and explicit lock-oriented lookup. Direct organization children are returned in stable `canonical_name, id` order. Resource canonical names are not currently unique, so canonical-name lookup uses stable `canonical_name, id` scalar ordering.
 
 Managed catalog repositories are global and non-tenant-scoped. `SQLAlchemyManagedCatalogRepository` supports read-only id lookup, exact code lookup, and active listing for `ResourceType`, `IdentifierType`, `RelationshipType`, `OwnershipRole`, `ClassificationType`, `LifecycleStatus`, `Criticality`, and `ExposureLevel`. `SQLAlchemyClassificationValueRepository` supports read-only id lookup, type-and-code lookup, and active listing by `classification_type_id`. All current catalog models use `is_active`; active lists filter on that column and order by `code, id` because no catalog table currently has `sort_order`. The adapters do not expose `add`, `flush`, commit, rollback, generic filtering, pagination, or catalog administration behavior.
+
+Temporal fact repositories live in `app.persistence.sqlalchemy.repositories.temporal`. They map `ResourceIdentifierRepository`, `ResourceOwnershipRepository`, `ResourceRelationshipRepository`, `ResourceClassificationRepository`, `ResourceLabelRepository`, and `ResourceStateRepository` to SQLAlchemy adapters. Current reads use the schema predicate `valid_to IS NULL` plus explicit tenant and domain predicates. `ResourceStateRepository.list_history(...)` returns current and closed state rows ordered by `valid_from, id`; other temporal contracts do not currently expose history methods.
+
+Temporal repositories are append/read only. `add(...)` attaches a new temporal fact row to the active Unit of Work session without flushing, committing, rolling back, closing previous rows, rewriting history, or deleting history. Current collection ordering is deterministic: identifiers by `identifier_type_id, namespace, normalized_value, id`; ownership by `ownership_role_id, is_primary DESC, organization_id, id`; relationships by relationship type plus opposite endpoint and id; classifications by `classification_type_id, classification_value_id, id`; labels by `label_id, id`. PostgreSQL continues to enforce current-row uniqueness, `valid_to > valid_from`, tenant-consistent resource references, relationship endpoint constraints, classification type/value consistency, label assignment consistency, and state uniqueness. Original SQLAlchemy/database exceptions propagate unchanged; persistence error translation and temporal close-current-plus-insert workflows remain deferred.
 
 Loading and locking are explicit. Repository helpers may apply concrete loader options selected for a specific operation, but there is no blanket eager loading or include/expand framework. `SELECT ... FOR UPDATE` is opt-in through `SQLAlchemyResourceRepository.get_for_update(...)` and is not applied to normal resource reads. Optimistic concurrency remains model-specific: `resource.record_version` is mapped as SQLAlchemy's `version_id_col`, and repository infrastructure preserves normal `StaleDataError` behavior without translating or manually incrementing version columns.
 
