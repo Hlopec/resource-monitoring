@@ -67,7 +67,13 @@ from app.persistence.sqlalchemy.repositories import (
     SQLAlchemyClassificationValueRepository,
     SQLAlchemyManagedCatalogRepository,
     SQLAlchemyOrganizationRepository,
+    SQLAlchemyResourceClassificationRepository,
+    SQLAlchemyResourceIdentifierRepository,
+    SQLAlchemyResourceLabelRepository,
+    SQLAlchemyResourceOwnershipRepository,
+    SQLAlchemyResourceRelationshipRepository,
     SQLAlchemyResourceRepository,
+    SQLAlchemyResourceStateRepository,
     SQLAlchemyTenantRepository,
 )
 
@@ -87,6 +93,15 @@ SQLALCHEMY_TYPE_NAMES = {
     "Session",
 }
 FORBIDDEN_REPOSITORY_METHODS = {"commit", "rollback", "filter", "query", "execute"}
+FORBIDDEN_REPLACEMENT_METHODS = {
+    "close_current",
+    "close_current_and_add",
+    "delete_history",
+    "remove",
+    "replace_current",
+    "rewrite_history",
+    "upsert_current",
+}
 FORBIDDEN_READ_ONLY_CATALOG_METHODS = FORBIDDEN_REPOSITORY_METHODS | {
     "add",
     "delete",
@@ -102,6 +117,12 @@ CONCRETE_REPOSITORIES = (
     SQLAlchemyResourceRepository,
     SQLAlchemyManagedCatalogRepository,
     SQLAlchemyClassificationValueRepository,
+    SQLAlchemyResourceIdentifierRepository,
+    SQLAlchemyResourceOwnershipRepository,
+    SQLAlchemyResourceRelationshipRepository,
+    SQLAlchemyResourceClassificationRepository,
+    SQLAlchemyResourceLabelRepository,
+    SQLAlchemyResourceStateRepository,
 )
 TENANT_SCOPED_REPOSITORIES = (
     OrganizationRepository,
@@ -238,6 +259,12 @@ def test_unit_of_work_protocol_exposes_technology_neutral_repositories() -> None
     assert hints["lifecycle_statuses"] == ManagedCatalogRepository[LifecycleStatus]
     assert hints["criticalities"] == ManagedCatalogRepository[Criticality]
     assert hints["exposure_levels"] == ManagedCatalogRepository[ExposureLevel]
+    assert hints["resource_identifiers"] is ResourceIdentifierRepository
+    assert hints["resource_ownerships"] is ResourceOwnershipRepository
+    assert hints["resource_relationships"] is ResourceRelationshipRepository
+    assert hints["resource_classifications"] is ResourceClassificationRepository
+    assert hints["resource_labels"] is ResourceLabelRepository
+    assert hints["resource_states"] is ResourceStateRepository
 
 
 def test_repository_protocols_do_not_expose_optional_tenant_scope() -> None:
@@ -262,6 +289,7 @@ def test_repository_contracts_do_not_expose_transaction_or_generic_query_methods
     for protocol in ALL_REPOSITORY_PROTOCOLS:
         public_method_names = {name for name, _ in _public_methods(protocol)}
         assert FORBIDDEN_REPOSITORY_METHODS.isdisjoint(public_method_names), protocol
+        assert FORBIDDEN_REPLACEMENT_METHODS.isdisjoint(public_method_names), protocol
 
         for name, member in _public_methods(protocol):
             signature = inspect.signature(member)

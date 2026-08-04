@@ -10,6 +10,14 @@ from app.application.ports.catalogs import (
 from app.application.ports.organizations import OrganizationRepository
 from app.application.ports.resources import ResourceRepository
 from app.application.ports.tenants import TenantRepository
+from app.application.ports.temporal import (
+    ResourceClassificationRepository,
+    ResourceIdentifierRepository,
+    ResourceLabelRepository,
+    ResourceOwnershipRepository,
+    ResourceRelationshipRepository,
+    ResourceStateRepository,
+)
 from app.models import (
     ClassificationType,
     Criticality,
@@ -44,6 +52,12 @@ class UnitOfWork(Protocol):
     lifecycle_statuses: ManagedCatalogRepository[LifecycleStatus]
     criticalities: ManagedCatalogRepository[Criticality]
     exposure_levels: ManagedCatalogRepository[ExposureLevel]
+    resource_identifiers: ResourceIdentifierRepository
+    resource_ownerships: ResourceOwnershipRepository
+    resource_relationships: ResourceRelationshipRepository
+    resource_classifications: ResourceClassificationRepository
+    resource_labels: ResourceLabelRepository
+    resource_states: ResourceStateRepository
 
     def __enter__(self) -> Self:
         """Open the Unit of Work and return the active instance."""

@@ -24,18 +24,34 @@ from app.persistence.sqlalchemy.repositories.tenant_scoped import (
     TenantScopedSQLAlchemyRepository,
 )
 from app.persistence.sqlalchemy.repositories.tenants import SQLAlchemyTenantRepository
+from app.persistence.sqlalchemy.repositories.temporal import (
+    SQLAlchemyResourceClassificationRepository,
+    SQLAlchemyResourceIdentifierRepository,
+    SQLAlchemyResourceLabelRepository,
+    SQLAlchemyResourceOwnershipRepository,
+    SQLAlchemyResourceRelationshipRepository,
+    SQLAlchemyResourceStateRepository,
+    current_temporal_statement,
+)
 
 __all__ = [
     "RepositoryT",
     "SQLAlchemyClassificationValueRepository",
     "SQLAlchemyManagedCatalogRepository",
     "SQLAlchemyOrganizationRepository",
+    "SQLAlchemyResourceClassificationRepository",
+    "SQLAlchemyResourceIdentifierRepository",
+    "SQLAlchemyResourceLabelRepository",
+    "SQLAlchemyResourceOwnershipRepository",
+    "SQLAlchemyResourceRelationshipRepository",
     "SQLAlchemyResourceRepository",
+    "SQLAlchemyResourceStateRepository",
     "SQLAlchemyRepository",
     "SQLAlchemyTenantRepository",
     "TenantScopedSQLAlchemyRepository",
     "apply_for_update",
     "bind_repository",
+    "current_temporal_statement",
     "entity_select",
     "tenant_entity_select",
     "tenant_select",
