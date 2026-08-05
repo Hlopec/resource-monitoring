@@ -25,6 +25,7 @@ from app.application.handlers import (
     GetResourceByIdHandler,
     GetResourceDetailsHandler,
     QueryHandler,
+    TransitionResourceStateHandler,
 )
 from app.application.ports import UnitOfWorkFactory
 from app.application.ports.catalogs import (
@@ -414,6 +415,7 @@ def test_reference_handlers_depend_on_unit_of_work_factory_only() -> None:
         GetResourceByCanonicalNameHandler,
         GetResourceByIdHandler,
         GetResourceDetailsHandler,
+        TransitionResourceStateHandler,
     ):
         hints = get_type_hints(handler_type.__init__)
         assert hints["uow_factory"] is UnitOfWorkFactory

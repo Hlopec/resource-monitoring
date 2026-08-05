@@ -10,6 +10,7 @@ from app.application.results.resources import (
     ResourceMergeResult,
     ResourceOwnershipResult,
     ResourceReadResult,
+    ResourceStateTransitionedResult,
     ResourceStateResult,
 )
 
@@ -23,5 +24,6 @@ __all__ = [
     "ResourceMergeResult",
     "ResourceOwnershipResult",
     "ResourceReadResult",
+    "ResourceStateTransitionedResult",
     "ResourceStateResult",
 ]
