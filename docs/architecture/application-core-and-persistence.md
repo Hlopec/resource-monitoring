@@ -2,11 +2,11 @@
 
 ## Goals
 
-Stage `03.0` establishes the boundary rules for the application core and PostgreSQL persistence layer. It defines dependency direction, package responsibilities, repository contract conventions, Unit of Work semantics, transaction ownership, tenant-safety rules, ORM entity usage policy, persistence error boundaries, relationship-loading conventions, write/read separation, testing expectations, and the implementation order for `03.0.2+`.
+Stage `03.0` establishes the boundary rules for the application core and PostgreSQL persistence layer. Stage `03.1` starts the application-service architecture that orchestrates those persistence contracts. Together they define dependency direction, package responsibilities, command and query contracts, handler contracts, repository contract conventions, Unit of Work semantics, transaction ownership, tenant-safety rules, ORM entity usage policy, application result contracts, persistence error boundaries, relationship-loading conventions, write/read separation, testing expectations, and the implementation order for `03.0.2+`.
 
 ## Non-goals
 
-This stage does not implement API routes, FastAPI dependency wiring, Pydantic request or response schemas, lifecycle services, temporal replacement workflows, merge workflows, collectors, background jobs, event buses, partitioning, sharding, async SQLAlchemy, or new database tables. Existing merged Alembic migrations are not edited.
+This stage does not implement API routes, FastAPI dependency wiring, Pydantic request or response schemas, lifecycle business use cases, temporal replacement workflows, merge workflows, collectors, background jobs, command buses, mediators, handler registries, decorators, middleware, event buses, partitioning, sharding, async SQLAlchemy, or new database tables. Existing merged Alembic migrations are not edited.
 
 ## Current-State Assessment
 
@@ -14,27 +14,30 @@ The current repository uses synchronous SQLAlchemy. `api/app/db/session.py` crea
 
 Database settings are loaded through `DatabaseSettings` in `api/app/db/settings.py`. Alembic imports `app.models` in `api/alembic/env.py`, which registers all SQLAlchemy mapped models against `Base.metadata`. Tests create isolated PostgreSQL databases in `api/tests/conftest.py`, run Alembic to `head`, create synchronous sessions with `sessionmaker`, and roll back fixture sessions after use.
 
-There is no existing application-service package, DTO hierarchy, or dependency-injection wiring. The repository should therefore preserve the current synchronous SQLAlchemy model and introduce only the minimum application-facing contracts and persistence adapters needed to make each stage explicit and testable.
+The application-service package is intentionally small. It defines immutable command and query objects, generic handler protocols, typed result contracts, a UnitOfWorkFactory protocol, and minimal reference handlers. It does not introduce a command bus, automatic discovery, transport schemas, lifecycle business workflows, or dependency-injection framework wiring.
 
 ## Dependency Direction
 
 ```mermaid
 flowchart TD
     API[Future HTTP/API layer] --> APP[Application layer]
-    APP --> PORTS[Repository and Unit of Work contracts]
+    APP --> CQ[Commands and Queries]
+    CQ --> HANDLERS[Application Handlers]
+    HANDLERS --> UOWF[UnitOfWorkFactory]
+    UOWF --> PORTS[Unit of Work and Repository contracts]
     SA[SQLAlchemy persistence implementations] --> PORTS
     SA --> ORM[SQLAlchemy ORM models]
     SA --> PG[(PostgreSQL)]
 ```
 
-The application layer owns use-case decisions and depends on application-facing contracts. SQLAlchemy implementations adapt those contracts to ORM models and PostgreSQL.
+The application layer owns use-case decisions and depends on application-facing contracts. Future transport code constructs command or query objects and invokes explicit handlers. Handlers depend on the application-facing `UnitOfWorkFactory` protocol, not on `SQLAlchemyUnitOfWork` or concrete repositories. SQLAlchemy implementations adapt Unit of Work and repository contracts to ORM models and PostgreSQL.
 
 ## Dependency Matrix
 
 | Source | May depend on | Must not depend on |
 | --- | --- | --- |
 | Future API layer | Application use cases, application errors, DTOs when introduced | SQLAlchemy sessions for write operations, concrete repositories |
-| Application layer | ORM mapped entity types, application ports, application errors | SQLAlchemy `Session`, query APIs, driver exceptions, concrete persistence implementations |
+| Application layer | ORM mapped entity types through repository results, application ports, application errors, immutable commands, immutable queries, typed results | SQLAlchemy `Session`, query APIs, driver exceptions, concrete persistence implementations, FastAPI, Pydantic |
 | Application ports | Standard library typing and domain/entity types | SQLAlchemy, FastAPI, Pydantic, concrete persistence implementations |
 | SQLAlchemy persistence | Application ports, application errors, ORM models, SQLAlchemy | API routing, business workflows outside persistence adaptation |
 | ORM models | SQLAlchemy base/mixins and model relationships | Application services, repositories, API handlers |
@@ -46,7 +49,12 @@ The minimum package baseline is:
 
 ```text
 api/app/application/
+  commands/
+    resources.py
   errors.py
+  handlers/
+    protocols.py
+    resources.py
   ports/
     catalogs.py
     labels.py
@@ -57,12 +65,18 @@ api/app/application/
     temporal.py
     tenants.py
     unit_of_work.py
+  queries/
+    resources.py
+  results/
+    resources.py
 api/app/persistence/
   sqlalchemy/
     repositories/
 ```
 
-`app.application` is the application core boundary. It contains application-facing errors and ports and must not import SQLAlchemy. `app.persistence.sqlalchemy` is the adapter location for SQLAlchemy persistence code. The concrete synchronous Unit of Work lives in `app.persistence.sqlalchemy.unit_of_work.SQLAlchemyUnitOfWork`; future concrete repositories will live under the same persistence boundary.
+`app.application` is the application core boundary. It contains application-facing commands, queries, handlers, results, errors, and ports and must not import SQLAlchemy, concrete persistence implementations, FastAPI, or Pydantic. `app.persistence.sqlalchemy` is the adapter location for SQLAlchemy persistence code. The concrete synchronous Unit of Work lives in `app.persistence.sqlalchemy.unit_of_work.SQLAlchemyUnitOfWork`; concrete repositories live under the same persistence boundary.
+
+Every application subpackage contains meaningful code. Empty placeholder packages are not introduced. Command and query modules hold immutable data contracts. Handler modules hold explicit handler protocols and small directly-instantiated reference handlers. Result modules hold immutable typed application result shapes.
 
 Shared SQLAlchemy repository infrastructure lives in `app.persistence.sqlalchemy.repositories`. It is an internal adapter package, not an application-facing contract package. `base.py` contains the session-bound base repository and direct binding helper, `tenant_scoped.py` contains tenant-owned repository primitives, and `helpers.py` contains small typed statement helpers for entity lookup, tenant-scoped lookup, explicit loader options, and opt-in `SELECT ... FOR UPDATE`.
 
@@ -110,6 +124,109 @@ Alias and merge contracts expose alias resolution and merge-lineage persistence 
 Repository contracts are exposed through the application-facing Unit of Work protocol where concrete adapters now exist. The current neutral properties are `tenants: TenantRepository`, `organizations: OrganizationRepository`, `resources: ResourceRepository`, `resource_types: ManagedCatalogRepository[ResourceType]`, `identifier_types: ManagedCatalogRepository[IdentifierType]`, `relationship_types: ManagedCatalogRepository[RelationshipType]`, `ownership_roles: ManagedCatalogRepository[OwnershipRole]`, `classification_types: ManagedCatalogRepository[ClassificationType]`, `classification_values: ClassificationValueRepository`, `lifecycle_statuses: ManagedCatalogRepository[LifecycleStatus]`, `criticalities: ManagedCatalogRepository[Criticality]`, `exposure_levels: ManagedCatalogRepository[ExposureLevel]`, `resource_identifiers: ResourceIdentifierRepository`, `resource_ownerships: ResourceOwnershipRepository`, `resource_relationships: ResourceRelationshipRepository`, `resource_classifications: ResourceClassificationRepository`, `resource_labels: ResourceLabelRepository`, `resource_states: ResourceStateRepository`, `resource_aliases: ResourceAliasRepository`, and `resource_merges: ResourceMergeRepository`; they import only application-facing protocols and models and do not expose SQLAlchemy types. Future repository properties should be added as their concrete adapters are implemented.
 
 The shared SQLAlchemy base repository exposes only internal primitives: attach an entity to the injected session, explicitly flush pending work, explicitly refresh an entity, evaluate prepared scalar or sequence statements, and test existence through a prepared statement. It deliberately does not expose a public generic CRUD interface, unrestricted `filter(**kwargs)`, generic query execution, destructive delete helpers, or transaction control. Concrete repositories own domain-specific methods such as tenant slug lookup; organization canonical-name, external-key, existence, and child-listing lookups; resource id, canonical-name, existence, and explicit lock-oriented lookups; read-only managed catalog lookup; append/read temporal fact lookup; exact alias lookup; resource alias listing; and direct merge-edge lookup. Label lookups remain deferred.
+
+## Command and Query Contracts
+
+Commands are immutable, technology-neutral data contracts. They carry validated or pre-validation input for a single application intent and do not contain business logic. They do not expose `execute()`, `commit()`, SQLAlchemy sessions, SQLAlchemy queries, FastAPI request objects, Pydantic models, or persistence implementations. The reference command is `EnsureResourceExistsCommand`, a narrow validation command used only to prove command-handler transaction rules.
+
+Queries are immutable, technology-neutral read contracts. They carry lookup input for read-only handlers and do not expose SQLAlchemy `Result`, `Query`, `Select`, sessions, transactions, pagination frameworks, or specification objects. The reference query is `GetResourceByIdQuery`, a tenant-scoped resource lookup by id.
+
+Command and query objects are plain frozen dataclasses. Future commands and queries should remain data-only and should be instantiated directly by future transport or orchestration code.
+
+## Handler Contracts
+
+Handlers are explicit classes instantiated directly with constructor-injected dependencies. Generic handler protocols are:
+
+```python
+CommandHandler[C, R]
+QueryHandler[Q, R]
+```
+
+Handlers depend on `UnitOfWorkFactory`, application commands, application queries, application results, and application errors. They do not depend on `SQLAlchemyUnitOfWork`, concrete repositories, FastAPI, Pydantic, middleware, decorators, command buses, handler registries, mediators, reflection, or automatic discovery.
+
+Each handler execution creates exactly one Unit of Work by calling the injected factory. Command handlers validate through repositories inside that Unit of Work, call `commit()` exactly once after successful validation, and perform no repository operations after commit. Query handlers use one Unit of Work for read-only access and never call `commit()`. Rollback on validation errors, misses, exceptions, and uncommitted query exits is left to the Unit of Work context manager.
+
+The reference handlers are intentionally limited:
+
+- `GetResourceByIdHandler` reads `uow.resources.get_by_id(...)` and returns a typed `ResourceReadResult`.
+- `EnsureResourceExistsHandler` checks `uow.resources.exists(...)` and commits once only when the resource exists.
+
+They do not create resources, update resources, implement lifecycle transitions, close temporal facts, execute merges, resolve canonical lineage, expose APIs, or define business workflows.
+
+## UnitOfWorkFactory
+
+Application handlers depend on:
+
+```python
+class UnitOfWorkFactory(Protocol):
+    def __call__(self) -> UnitOfWork:
+        ...
+```
+
+The factory returns a fresh Unit of Work for one handler execution. The application layer depends only on this protocol. Production wiring may later provide `SQLAlchemyUnitOfWork`, but `app.application` modules must not import it. Factories must not return a singleton Unit of Work, because concrete Unit of Work instances are single-use and own one transaction lifetime.
+
+## Result Contracts
+
+Application results are immutable typed dataclasses. They are transport-neutral and contain explicit fields rather than `dict[str, Any]`, HTTP response objects, Pydantic models, SQLAlchemy `Row` values, sessions, or lazy query objects.
+
+`ResourceReadResult` is the reference read result. It copies scalar resource fields needed by the reference query handler so callers do not receive a session-bound ORM object from the handler. Future result contracts should follow the same policy unless a later use case explicitly documents a controlled mapped-entity return.
+
+## Application Error Policy
+
+Application code raises technology-neutral application errors:
+
+- `ApplicationError`
+- `EntityNotFoundError`
+- `ConflictError`
+- `ValidationError`
+- `ConcurrentModificationError`
+- `TenantBoundaryError`
+- `PersistenceError`
+
+`ValidationError` may carry immutable `ValidationFailure` details. Application errors do not carry HTTP status codes, FastAPI exceptions, Pydantic validation objects, SQLAlchemy exceptions, driver exceptions, or storage-specific constraint details. Database exception translation remains deferred to the persistence error translation stage.
+
+## Handler Transaction Flow
+
+Command handlers use one Unit of Work, validate first, commit last, and rely on context-manager rollback for all unsuccessful paths:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Handler
+    participant Factory as UnitOfWorkFactory
+    participant UOW as UnitOfWork
+    participant Repo as Repository Protocol
+
+    Caller->>Handler: handle(command)
+    Handler->>Factory: __call__()
+    Factory-->>Handler: fresh UnitOfWork
+    Handler->>UOW: __enter__()
+    Handler->>Repo: validate/read state
+    Repo-->>Handler: result
+    Handler->>UOW: commit()
+    Handler->>UOW: __exit__()
+    Handler-->>Caller: typed result or None
+```
+
+Query handlers use one Unit of Work and never commit:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Handler
+    participant Factory as UnitOfWorkFactory
+    participant UOW as UnitOfWork
+    participant Repo as Repository Protocol
+
+    Caller->>Handler: handle(query)
+    Handler->>Factory: __call__()
+    Factory-->>Handler: fresh UnitOfWork
+    Handler->>UOW: __enter__()
+    Handler->>Repo: read state
+    Repo-->>Handler: entity or None
+    Handler->>UOW: __exit__()
+    Handler-->>Caller: typed result
+```
 
 ## Unit of Work Semantics
 
@@ -180,13 +297,13 @@ with SQLAlchemyUnitOfWork() as uow:
 
 ## Transaction Ownership
 
-One application command or use case normally owns one Unit of Work. Application services decide whether the operation succeeds. Repositories never commit and helper functions must not hide commits. External network calls should not normally run inside an open database transaction.
+One application command or use case normally owns one Unit of Work. Application handlers obtain that Unit of Work by calling an injected `UnitOfWorkFactory`. Application services decide whether the operation succeeds. Repositories never commit and helper functions must not hide commits. External network calls should not normally run inside an open database transaction.
 
 Repository `add(...)`, lookup helpers, refresh helpers, and locking helpers never commit, roll back, close a session, dispose an engine, retry a failed transaction, or translate SQLAlchemy/database exceptions. A failed flush remains the Unit of Work's failed transaction; cleanup is handled by `SQLAlchemyUnitOfWork` rollback-on-exit or an explicit Unit of Work rollback. Repositories may flush only when the concrete operation requires generated/default values, early constraint validation, or subsequent dependent writes, and no helper commits after flushing.
 
-Read-only query services may later use a separate controlled session pattern. SQLAlchemy and PostgreSQL errors are translated at the persistence boundary. Retry behavior for deadlocks or serialization failures must be explicit at the application orchestration level and must not be hidden inside repositories.
+Command handlers call `commit()` exactly once, after successful validation and repository interaction, and perform no repository operations after commit. Query handlers never call `commit()` and return typed result contracts rather than lazy session-bound query objects. Read-only query services may later use a separate controlled session pattern. SQLAlchemy and PostgreSQL errors are translated at the persistence boundary. Retry behavior for deadlocks or serialization failures must be explicit at the application orchestration level and must not be hidden inside repositories.
 
-The existing `get_session()` helper remains available for lower-level framework integration. The existing `transaction_session()` helper remains for current low-level scripts or compatibility paths, but it is not the application-core transaction abstraction. New application command workflows should use `SQLAlchemyUnitOfWork`.
+The existing `get_session()` helper remains available for lower-level framework integration. The existing `transaction_session()` helper remains for current low-level scripts or compatibility paths, but it is not the application-core transaction abstraction. New application command workflows should receive Unit of Work instances through `UnitOfWorkFactory`; outer infrastructure wiring may provide `SQLAlchemyUnitOfWork` behind that protocol.
 
 ## Tenant-Safety Rules
 
@@ -223,11 +340,12 @@ Application code raises application-facing errors:
 - `ApplicationError`
 - `EntityNotFoundError`
 - `ConflictError`
+- `ValidationError`
 - `ConcurrentModificationError`
 - `TenantBoundaryError`
 - `PersistenceError`
 
-Future SQLAlchemy persistence implementations translate storage failures at the boundary. Translation should rely on stable information such as SQLSTATE, PostgreSQL constraint names, driver exception types, and SQLAlchemy optimistic concurrency exception types. Application code must not parse human-readable PostgreSQL error messages. The current Unit of Work deliberately preserves original SQLAlchemy/database exceptions; the translation matrix belongs to `03.0.11`.
+Future SQLAlchemy persistence implementations translate storage failures at the boundary. Translation should rely on stable information such as SQLSTATE, PostgreSQL constraint names, driver exception types, and SQLAlchemy optimistic concurrency exception types. Application code must not parse human-readable PostgreSQL error messages. The current Unit of Work deliberately preserves original SQLAlchemy/database exceptions; the translation matrix belongs to `03.1.4`.
 
 ## Relationship-Loading Rules
 
@@ -237,7 +355,7 @@ Critical query paths should later include query-count or SQL-shape tests. `SELEC
 
 The shared loading helper only applies explicit SQLAlchemy loader options chosen by a concrete repository. It does not implement blanket eager loading, an include/expand framework, or global relationship-loading mutation. The locking helper only wraps a prepared statement with `with_for_update()` when a concrete repository asks for pessimistic locking; normal reads are not locked automatically, and no advisory locks, retry loops, deadlock handling, or lock timeout policy are introduced here.
 
-`Resource` is currently the only mapped entity with SQLAlchemy optimistic concurrency enabled through `record_version` and `version_id_col`. Shared repository infrastructure preserves SQLAlchemy's normal version-check behavior and does not catch `StaleDataError`, translate it, disable version checks, or define a generic version-column convention for all models. Broader persistence error translation remains deferred to `03.0.11`.
+`Resource` is currently the only mapped entity with SQLAlchemy optimistic concurrency enabled through `record_version` and `version_id_col`. Shared repository infrastructure preserves SQLAlchemy's normal version-check behavior and does not catch `StaleDataError`, translate it, disable version checks, or define a generic version-column convention for all models. Broader persistence error translation remains deferred to `03.1.4`.
 
 ## Write/Read Separation
 
@@ -247,7 +365,7 @@ This is not a CQRS framework. This stage does not introduce a separate read data
 
 ## Testing Strategy
 
-Architecture enforcement tests check that application modules do not import SQLAlchemy, ports do not import concrete persistence implementations, ports do not expose SQLAlchemy-facing types, tenant-scoped repository protocols require explicit tenant ids, Unit of Work lifecycle methods exist, package imports succeed, and the application error hierarchy is valid.
+Architecture enforcement tests check that application modules do not import SQLAlchemy, FastAPI, Pydantic, or concrete persistence implementations; ports do not import concrete persistence implementations; ports do not expose SQLAlchemy-facing types; tenant-scoped repository protocols require explicit tenant ids; Unit of Work lifecycle methods exist; `UnitOfWorkFactory` returns the application-facing `UnitOfWork`; package imports succeed; handler protocols expose direct `handle(...)` contracts; reference handlers depend on `UnitOfWorkFactory`; and the application error hierarchy is valid.
 
 SQLAlchemy Unit of Work integration tests verify explicit commit, rollback-by-default for inserts/updates/deletes/flushed rows, exception rollback and propagation, failed flush/commit cleanup, single-use lifecycle errors, session isolation, factory call count, shared engine usability after Unit of Work exit, protocol compliance, and compatibility with `get_session()` and `transaction_session()`.
 
@@ -265,6 +383,8 @@ Temporal fact repository tests verify protocol compatibility, injected-session u
 
 Lineage repository tests verify protocol compatibility, injected-session usage, exact alias-to-resource lookup, direct alias listing, direct outgoing and incoming merge-edge lookup, wrong-tenant misses, deterministic ordering, append-only add and explicit flush behavior, rollback-by-default, explicit commit persistence, failed transaction cleanup, multi-repository atomicity, database constraint preservation, Unit of Work lifecycle, session sharing, and concrete adapter placement under persistence.
 
+Application service architecture tests verify immutable commands, immutable queries, immutable typed results, structural `UnitOfWorkFactory` compatibility, fresh Unit of Work creation per execution, command handler commit-on-success behavior, rollback on command validation failure, query handler no-commit behavior, rollback on query misses, technology-neutral validation failures, and reference handler compatibility with the existing SQLAlchemy Unit of Work through factory injection.
+
 Future repository implementation issues must add integration tests proving tenant isolation, transaction behavior, no repository-level commits, error translation, relationship loading behavior, and query shape for critical paths.
 
 ## Accepted Trade-Offs
@@ -273,7 +393,7 @@ The project remains synchronous because the current engine, sessions, tests, and
 
 ## Deferred Concerns
 
-Deferred work includes Label SQLAlchemy repository implementations; catalog mutation and catalog administration services; temporal fact replacement services; lineage services; additional use-case services; DTO/result types; persistence error translation matrix; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities.
+Deferred work includes Label SQLAlchemy repository implementations; catalog mutation and catalog administration services; temporal fact replacement services; lineage services; real lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; persistence error translation matrix; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
 
 ## Implementation Roadmap
 
@@ -285,9 +405,10 @@ Deferred work includes Label SQLAlchemy repository implementations; catalog muta
 6. `03.0.7` — Implement Managed Catalog SQLAlchemy Repositories
 7. `03.0.8` — Implement Temporal Fact Persistence
 8. `03.0.9` — Implement Alias and Merge Persistence
-9. `03.0.10` — Implement Resource Lifecycle Application Services
-10. `03.0.11` — Introduce Application DTOs and Result Types
-11. `03.0.12` — Implement Persistence Error Translation
-12. `03.0.13` — Implement Query Services and Pagination
-13. `03.0.14` — Harden Persistence Integration Tests
-14. `03.0.15` — Audit Application Core and Persistence Architecture
+9. `03.1.1` — Define Application Service and Command Architecture
+10. `03.1.2` — Implement Resource Lifecycle Application Services
+11. `03.1.3` — Expand Application DTOs and Result Types
+12. `03.1.4` — Implement Persistence Error Translation
+13. `03.1.5` — Implement Query Services and Pagination
+14. `03.1.6` — Harden Persistence Integration Tests
+15. `03.1.7` — Audit Application Core and Persistence Architecture

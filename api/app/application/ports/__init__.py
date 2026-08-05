@@ -24,7 +24,7 @@ from app.application.ports.temporal import (
     ResourceStateRepository,
 )
 from app.application.ports.tenants import TenantRepository
-from app.application.ports.unit_of_work import UnitOfWork
+from app.application.ports.unit_of_work import UnitOfWork, UnitOfWorkFactory
 
 __all__ = [
     "ClassificationValueRepository",
@@ -44,4 +44,5 @@ __all__ = [
     "TenantRepository",
     "TenantScopedLookupRepository",
     "UnitOfWork",
+    "UnitOfWorkFactory",
 ]

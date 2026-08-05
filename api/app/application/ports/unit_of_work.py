@@ -85,3 +85,11 @@ class UnitOfWork(Protocol):
     def rollback(self) -> None:
         """Roll back the current transaction explicitly."""
         ...
+
+
+class UnitOfWorkFactory(Protocol):
+    """Create a fresh Unit of Work for one handler execution."""
+
+    def __call__(self) -> UnitOfWork:
+        """Return a new Unit of Work instance."""
+        ...

@@ -1,8 +1,20 @@
 """Application-facing error taxonomy."""
 
+from __future__ import annotations
+
+from dataclasses import dataclass
+
 
 class ApplicationError(Exception):
     """Base class for errors that application use cases may raise."""
+
+
+@dataclass(frozen=True)
+class ValidationFailure:
+    """Technology-neutral validation failure detail."""
+
+    field: str
+    message: str
 
 
 class EntityNotFoundError(ApplicationError):
@@ -11,6 +23,19 @@ class EntityNotFoundError(ApplicationError):
 
 class ConflictError(ApplicationError):
     """An operation conflicts with an existing invariant or state."""
+
+
+class ValidationError(ApplicationError):
+    """Input command or query data failed application validation."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failures: tuple[ValidationFailure, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.failures = failures
 
 
 class ConcurrentModificationError(ConflictError):
