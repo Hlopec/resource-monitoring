@@ -14,7 +14,16 @@ from app.application.errors import (
     EntityNotFoundError,
     PersistenceError,
     TenantBoundaryError,
+    ValidationError,
+    ValidationFailure,
 )
+from app.application.handlers import (
+    CommandHandler,
+    EnsureResourceExistsHandler,
+    GetResourceByIdHandler,
+    QueryHandler,
+)
+from app.application.ports import UnitOfWorkFactory
 from app.application.ports.catalogs import (
     ClassificationValueRepository,
     ManagedCatalogRepository,
@@ -85,7 +94,9 @@ PORTS_ROOT = APPLICATION_ROOT / "ports"
 SQLALCHEMY_PERSISTENCE_ROOT = ROOT / "app" / "persistence" / "sqlalchemy"
 
 SQLALCHEMY_IMPORT_ROOTS = {"sqlalchemy"}
+FORBIDDEN_APPLICATION_IMPORT_ROOTS = {"fastapi", "pydantic", "sqlalchemy"}
 FORBIDDEN_PERSISTENCE_IMPORT_ROOTS = {"fastapi", "pydantic"}
+FORBIDDEN_APPLICATION_MODULE_PREFIXES = {"app.persistence"}
 SQLALCHEMY_TYPE_NAMES = {
     "InstrumentedAttribute",
     "Query",
@@ -212,6 +223,19 @@ def test_application_modules_do_not_import_sqlalchemy() -> None:
         ), path
 
 
+def test_application_modules_do_not_import_transport_or_persistence_frameworks() -> None:
+    for path in _python_files(APPLICATION_ROOT):
+        imports = _imports_for(path)
+        assert not any(
+            imported.split(".", 1)[0] in FORBIDDEN_APPLICATION_IMPORT_ROOTS
+            for imported in imports
+        ), path
+        assert not any(
+            imported.startswith(tuple(FORBIDDEN_APPLICATION_MODULE_PREFIXES))
+            for imported in imports
+        ), path
+
+
 def test_sqlalchemy_persistence_does_not_import_api_or_schema_frameworks() -> None:
     for path in _python_files(SQLALCHEMY_PERSISTENCE_ROOT):
         imports = _imports_for(path)
@@ -229,12 +253,20 @@ def test_ports_do_not_import_concrete_persistence_implementations() -> None:
 
 def test_application_packages_are_importable() -> None:
     import app.application
+    import app.application.commands
+    import app.application.handlers
     import app.application.ports
+    import app.application.queries
+    import app.application.results
     import app.persistence
     import app.persistence.sqlalchemy
 
     assert app.application.ApplicationError is ApplicationError
+    assert app.application.ValidationError is ValidationError
     assert app.application.ports.UnitOfWork is UnitOfWork
+    assert app.application.ports.UnitOfWorkFactory is UnitOfWorkFactory
+    assert app.application.handlers.CommandHandler is CommandHandler
+    assert app.application.handlers.QueryHandler is QueryHandler
     assert app.application.ports.ResourceRepository is ResourceRepository
     assert app.application.ports.ManagedCatalogRepository is ManagedCatalogRepository
     assert app.persistence.__doc__
@@ -244,9 +276,13 @@ def test_application_packages_are_importable() -> None:
 def test_application_error_hierarchy_is_explicit() -> None:
     assert issubclass(EntityNotFoundError, ApplicationError)
     assert issubclass(ConflictError, ApplicationError)
+    assert issubclass(ValidationError, ApplicationError)
     assert issubclass(ConcurrentModificationError, ConflictError)
     assert issubclass(TenantBoundaryError, ApplicationError)
     assert issubclass(PersistenceError, ApplicationError)
+    failure = ValidationFailure("field", "message")
+    error = ValidationError("Invalid input", failures=(failure,))
+    assert error.failures == (failure,)
 
 
 def test_unit_of_work_protocol_declares_lifecycle_methods() -> None:
@@ -277,6 +313,12 @@ def test_unit_of_work_protocol_exposes_technology_neutral_repositories() -> None
     assert hints["resource_states"] is ResourceStateRepository
     assert hints["resource_aliases"] is ResourceAliasRepository
     assert hints["resource_merges"] is ResourceMergeRepository
+
+
+def test_unit_of_work_factory_protocol_returns_unit_of_work() -> None:
+    hints = get_type_hints(UnitOfWorkFactory.__call__)
+
+    assert hints["return"] is UnitOfWork
 
 
 def test_repository_protocols_do_not_expose_optional_tenant_scope() -> None:
@@ -333,6 +375,7 @@ def test_application_facing_ports_do_not_reference_sqlalchemy_types() -> None:
         TenantScopedLookupRepository,
         GlobalCatalogLookupRepository,
         UnitOfWork,
+        UnitOfWorkFactory,
         *ALL_REPOSITORY_PROTOCOLS,
     ):
         for name, member in inspect.getmembers(protocol, inspect.isfunction):
@@ -343,6 +386,32 @@ def test_application_facing_ports_do_not_reference_sqlalchemy_types() -> None:
                 protocol,
                 name,
             )
+
+
+def test_handler_protocols_define_direct_handle_contracts() -> None:
+    command_hints = get_type_hints(CommandHandler.handle)
+    query_hints = get_type_hints(QueryHandler.handle)
+
+    assert list(inspect.signature(CommandHandler.handle).parameters) == [
+        "self",
+        "command",
+    ]
+    assert list(inspect.signature(QueryHandler.handle).parameters) == [
+        "self",
+        "query",
+    ]
+    assert "return" in command_hints
+    assert "return" in query_hints
+
+
+def test_reference_handlers_depend_on_unit_of_work_factory_only() -> None:
+    for handler_type in (EnsureResourceExistsHandler, GetResourceByIdHandler):
+        hints = get_type_hints(handler_type.__init__)
+        assert hints["uow_factory"] is UnitOfWorkFactory
+        assert list(inspect.signature(handler_type.__init__).parameters) == [
+            "self",
+            "uow_factory",
+        ]
 
 
 def test_collection_repository_methods_return_sequence() -> None:

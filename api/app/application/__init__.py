@@ -11,6 +11,8 @@ from app.application.errors import (
     EntityNotFoundError,
     PersistenceError,
     TenantBoundaryError,
+    ValidationError,
+    ValidationFailure,
 )
 
 __all__ = [
@@ -20,4 +22,6 @@ __all__ = [
     "EntityNotFoundError",
     "PersistenceError",
     "TenantBoundaryError",
+    "ValidationError",
+    "ValidationFailure",
 ]
