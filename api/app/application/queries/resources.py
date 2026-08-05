@@ -12,3 +12,19 @@ class GetResourceByIdQuery:
 
     tenant_id: UUID
     resource_id: UUID
+
+
+@dataclass(frozen=True)
+class GetResourceDetailsQuery:
+    """Query for a fully materialized tenant-scoped resource projection."""
+
+    tenant_id: UUID
+    resource_id: UUID
+
+
+@dataclass(frozen=True)
+class GetResourceByCanonicalNameQuery:
+    """Query for a fully materialized resource projection by canonical name."""
+
+    tenant_id: UUID
+    canonical_name: str
