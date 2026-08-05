@@ -20,6 +20,19 @@ class ValidationFailure:
 class EntityNotFoundError(ApplicationError):
     """A requested entity was not found within the caller's allowed scope."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        entity_type: str | None = None,
+        lookup_field: str | None = None,
+        lookup_value: object | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.entity_type = entity_type
+        self.lookup_field = lookup_field
+        self.lookup_value = lookup_value
+
 
 class ConflictError(ApplicationError):
     """An operation conflicts with an existing invariant or state."""

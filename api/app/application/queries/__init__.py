@@ -1,5 +1,13 @@
 """Immutable application query contracts."""
 
-from app.application.queries.resources import GetResourceByIdQuery
+from app.application.queries.resources import (
+    GetResourceByCanonicalNameQuery,
+    GetResourceByIdQuery,
+    GetResourceDetailsQuery,
+)
 
-__all__ = ["GetResourceByIdQuery"]
+__all__ = [
+    "GetResourceByCanonicalNameQuery",
+    "GetResourceByIdQuery",
+    "GetResourceDetailsQuery",
+]

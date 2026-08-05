@@ -129,7 +129,7 @@ The shared SQLAlchemy base repository exposes only internal primitives: attach a
 
 Commands are immutable, technology-neutral data contracts. They carry validated or pre-validation input for a single application intent and do not contain business logic. They do not expose `execute()`, `commit()`, SQLAlchemy sessions, SQLAlchemy queries, FastAPI request objects, Pydantic models, or persistence implementations. The reference command is `EnsureResourceExistsCommand`, a narrow validation command used only to prove command-handler transaction rules.
 
-Queries are immutable, technology-neutral read contracts. They carry lookup input for read-only handlers and do not expose SQLAlchemy `Result`, `Query`, `Select`, sessions, transactions, pagination frameworks, or specification objects. The reference query is `GetResourceByIdQuery`, a tenant-scoped resource lookup by id.
+Queries are immutable, technology-neutral read contracts. They carry lookup input for read-only handlers and do not expose SQLAlchemy `Result`, `Query`, `Select`, sessions, transactions, pagination frameworks, or specification objects. `GetResourceByIdQuery` is the narrow reference lookup from the architecture baseline. `GetResourceDetailsQuery` reads a full tenant-scoped resource projection by resource id. `GetResourceByCanonicalNameQuery` reads the same projection through the existing resource canonical-name repository contract.
 
 Command and query objects are plain frozen dataclasses. Future commands and queries should remain data-only and should be instantiated directly by future transport or orchestration code.
 
@@ -146,9 +146,11 @@ Handlers depend on `UnitOfWorkFactory`, application commands, application querie
 
 Each handler execution creates exactly one Unit of Work by calling the injected factory. Command handlers validate through repositories inside that Unit of Work, call `commit()` exactly once after successful validation, and perform no repository operations after commit. Query handlers use one Unit of Work for read-only access and never call `commit()`. Rollback on validation errors, misses, exceptions, and uncommitted query exits is left to the Unit of Work context manager.
 
-The reference handlers are intentionally limited:
+The first handlers are intentionally limited:
 
 - `GetResourceByIdHandler` reads `uow.resources.get_by_id(...)` and returns a typed `ResourceReadResult`.
+- `GetResourceDetailsHandler` reads `uow.resources.get_by_id(...)` and composes a fully materialized `ResourceDetailsResult`.
+- `GetResourceByCanonicalNameHandler` reads `uow.resources.get_by_canonical_name(...)` and composes the same `ResourceDetailsResult`.
 - `EnsureResourceExistsHandler` checks `uow.resources.exists(...)` and commits once only when the resource exists.
 
 They do not create resources, update resources, implement lifecycle transitions, close temporal facts, execute merges, resolve canonical lineage, expose APIs, or define business workflows.
@@ -169,7 +171,36 @@ The factory returns a fresh Unit of Work for one handler execution. The applicat
 
 Application results are immutable typed dataclasses. They are transport-neutral and contain explicit fields rather than `dict[str, Any]`, HTTP response objects, Pydantic models, SQLAlchemy `Row` values, sessions, or lazy query objects.
 
-`ResourceReadResult` is the reference read result. It copies scalar resource fields needed by the reference query handler so callers do not receive a session-bound ORM object from the handler. Future result contracts should follow the same policy unless a later use case explicitly documents a controlled mapped-entity return.
+`ResourceReadResult` is the narrow reference read result. `ResourceDetailsResult` is the first production read projection. It copies scalar resource fields and current related facts into immutable dataclasses:
+
+- resource identity and metadata: `id`, `tenant_id`, `organization_id`, `resource_type_id`, `canonical_name`, `display_name`, `record_version`, `created_at`, `updated_at`
+- current state: `ResourceStateResult | None`
+- current identifiers: `tuple[ResourceIdentifierResult, ...]`
+- current ownership: `tuple[ResourceOwnershipResult, ...]`
+- current classifications: `tuple[ResourceClassificationResult, ...]`
+- current labels: `tuple[ResourceLabelResult, ...]`
+- aliases: `tuple[ResourceAliasResult, ...]`
+- direct outgoing merge: `ResourceMergeResult | None`
+
+Collection fields are tuples, never mutable lists. Result contracts do not expose ORM entities, lazy collections, sessions, dictionaries, HTTP response objects, Pydantic models, SQLAlchemy rows, or SQLAlchemy result objects. Future result contracts should follow the same policy unless a later use case explicitly documents a controlled mapped-entity return.
+
+## Resource Read Query Composition
+
+Resource read handlers compose projections only through existing Unit of Work repositories. They do not invent repository methods, bypass tenant scope, or reach into SQLAlchemy. `GetResourceDetailsHandler` first performs a tenant-scoped resource lookup. If the resource is absent, it raises `EntityNotFoundError` immediately and performs no related-fact reads. If the resource is present, it reads only the supported current/detail repositories needed for `ResourceDetailsResult`:
+
+- `uow.resource_states.get_current(...)`
+- `uow.resource_identifiers.get_current_for_resource(...)`
+- `uow.resource_ownerships.get_current_for_resource(...)`
+- `uow.resource_classifications.get_current_for_resource(...)`
+- `uow.resource_labels.get_current_for_resource(...)`
+- `uow.resource_aliases.list_for_resource(...)`
+- `uow.resource_merges.get_outgoing_merge(...)`
+
+`GetResourceByCanonicalNameHandler` uses `uow.resources.get_by_canonical_name(tenant_id, canonical_name)` as the initial lookup and then uses the same projection composition path. The handler does not trim, lowercase, normalize, or otherwise rewrite canonical names; repository behavior is the source of truth.
+
+Every repository call receives the explicit `tenant_id`. Wrong-tenant lookups raise the same `EntityNotFoundError` shape as absent resources so handlers do not leak resource existence across tenant boundaries. All projection fields are copied before the Unit of Work context exits, and no repository is accessed after exit.
+
+Pagination, search, filtering, resource lists, relationship graph expansion, canonical merge traversal, API serialization, and mutation workflows remain deferred.
 
 ## Application Error Policy
 
