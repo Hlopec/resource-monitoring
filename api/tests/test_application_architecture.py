@@ -19,6 +19,7 @@ from app.application.errors import (
 )
 from app.application.handlers import (
     CommandHandler,
+    CreateResourceHandler,
     EnsureResourceExistsHandler,
     GetResourceByCanonicalNameHandler,
     GetResourceByIdHandler,
@@ -409,6 +410,7 @@ def test_handler_protocols_define_direct_handle_contracts() -> None:
 def test_reference_handlers_depend_on_unit_of_work_factory_only() -> None:
     for handler_type in (
         EnsureResourceExistsHandler,
+        CreateResourceHandler,
         GetResourceByCanonicalNameHandler,
         GetResourceByIdHandler,
         GetResourceDetailsHandler,

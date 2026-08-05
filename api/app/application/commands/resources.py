@@ -3,7 +3,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
+
+
+@dataclass(frozen=True)
+class CreateResourceCommand:
+    """Command to create a base resource record within one tenant."""
+
+    tenant_id: UUID
+    resource_type_id: UUID
+    canonical_name: str
+    display_name: str
+    lifecycle_status_id: UUID
+    criticality_id: UUID
+    exposure_level_id: UUID
+    source_priority: int
+    confidence_score: Decimal
+    first_seen_at: datetime
+    last_seen_at: datetime
 
 
 @dataclass(frozen=True)
