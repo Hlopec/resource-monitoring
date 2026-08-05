@@ -7,6 +7,7 @@ from app.application.handlers.resources import (
     GetResourceByCanonicalNameHandler,
     GetResourceByIdHandler,
     GetResourceDetailsHandler,
+    TransitionResourceStateHandler,
 )
 
 __all__ = [
@@ -17,4 +18,5 @@ __all__ = [
     "GetResourceByIdHandler",
     "GetResourceDetailsHandler",
     "QueryHandler",
+    "TransitionResourceStateHandler",
 ]

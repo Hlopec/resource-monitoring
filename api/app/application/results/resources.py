@@ -29,6 +29,16 @@ class ResourceCreatedResult:
 
 
 @dataclass(frozen=True)
+class ResourceStateTransitionedResult:
+    """Result returned after a resource state transition is committed."""
+
+    resource_id: UUID
+    previous_state_id: UUID | None
+    new_state_id: UUID
+    transitioned_at: datetime
+
+
+@dataclass(frozen=True)
 class ResourceStateResult:
     """Current resource state projection."""
 
