@@ -19,6 +19,16 @@ class ResourceReadResult:
 
 
 @dataclass(frozen=True)
+class ResourceCreatedResult:
+    """Result returned after a base resource record is created."""
+
+    resource_id: UUID
+    tenant_id: UUID
+    canonical_name: str
+    record_version: int
+
+
+@dataclass(frozen=True)
 class ResourceStateResult:
     """Current resource state projection."""
 

@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
-from app.application.commands import EnsureResourceExistsCommand
-from app.application.errors import EntityNotFoundError
+from decimal import Decimal
+
+from app.application.commands import CreateResourceCommand, EnsureResourceExistsCommand
+from app.application.errors import (
+    ConflictError,
+    EntityNotFoundError,
+    ValidationError,
+    ValidationFailure,
+)
 from app.application.ports import UnitOfWork, UnitOfWorkFactory
 from app.application.queries import (
     GetResourceByCanonicalNameQuery,
@@ -13,6 +20,7 @@ from app.application.queries import (
 from app.application.results import (
     ResourceAliasResult,
     ResourceClassificationResult,
+    ResourceCreatedResult,
     ResourceDetailsResult,
     ResourceIdentifierResult,
     ResourceLabelResult,
@@ -22,6 +30,8 @@ from app.application.results import (
     ResourceStateResult,
 )
 from app.models import Resource
+
+INITIAL_RESOURCE_RECORD_VERSION = 1
 
 
 class GetResourceByIdHandler:
@@ -102,6 +112,153 @@ class EnsureResourceExistsHandler:
             if not uow.resources.exists(command.tenant_id, command.resource_id):
                 raise EntityNotFoundError("Resource not found")
             uow.commit()
+
+
+class CreateResourceHandler:
+    """Command handler for creating one base resource record."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def handle(self, command: CreateResourceCommand) -> ResourceCreatedResult:
+        """Create a resource, commit once, and return a materialized result."""
+        _validate_create_resource_command(command)
+        with self._uow_factory() as uow:
+            if uow.tenants.get_by_id(command.tenant_id) is None:
+                raise EntityNotFoundError(
+                    "Tenant not found",
+                    entity_type="Tenant",
+                    lookup_field="tenant_id",
+                    lookup_value=command.tenant_id,
+                )
+            _require_active_catalog(
+                uow.resource_types,
+                command.resource_type_id,
+                entity_type="ResourceType",
+                lookup_field="resource_type_id",
+            )
+            _require_active_catalog(
+                uow.lifecycle_statuses,
+                command.lifecycle_status_id,
+                entity_type="LifecycleStatus",
+                lookup_field="lifecycle_status_id",
+            )
+            _require_active_catalog(
+                uow.criticalities,
+                command.criticality_id,
+                entity_type="Criticality",
+                lookup_field="criticality_id",
+            )
+            _require_active_catalog(
+                uow.exposure_levels,
+                command.exposure_level_id,
+                entity_type="ExposureLevel",
+                lookup_field="exposure_level_id",
+            )
+            existing = uow.resources.get_by_canonical_name(
+                command.tenant_id,
+                command.canonical_name,
+            )
+            if existing is not None:
+                raise ConflictError(
+                    "Resource canonical name already exists",
+                    entity_type="Resource",
+                    conflict_field="canonical_name",
+                    conflict_value=command.canonical_name,
+                )
+
+            resource = Resource(
+                tenant_id=command.tenant_id,
+                resource_type_id=command.resource_type_id,
+                canonical_name=command.canonical_name,
+                display_name=command.display_name,
+                lifecycle_status_id=command.lifecycle_status_id,
+                criticality_id=command.criticality_id,
+                exposure_level_id=command.exposure_level_id,
+                source_priority=command.source_priority,
+                confidence_score=command.confidence_score,
+                first_seen_at=command.first_seen_at,
+                last_seen_at=command.last_seen_at,
+            )
+            uow.resources.add(resource)
+            result = ResourceCreatedResult(
+                resource_id=resource.id,
+                tenant_id=command.tenant_id,
+                canonical_name=command.canonical_name,
+                record_version=INITIAL_RESOURCE_RECORD_VERSION,
+            )
+            uow.commit()
+            return result
+
+
+def _validate_create_resource_command(command: CreateResourceCommand) -> None:
+    failures: list[ValidationFailure] = []
+    if command.canonical_name.strip() == "":
+        failures.append(ValidationFailure("canonical_name", "must not be blank"))
+    if command.display_name.strip() == "":
+        failures.append(ValidationFailure("display_name", "must not be blank"))
+    if command.source_priority < 0 or command.source_priority > 1000:
+        failures.append(
+            ValidationFailure("source_priority", "must be between 0 and 1000")
+        )
+    if command.confidence_score < Decimal("0") or command.confidence_score > Decimal(
+        "1"
+    ):
+        failures.append(
+            ValidationFailure("confidence_score", "must be between 0 and 1")
+        )
+    first_seen_at_is_aware = (
+        command.first_seen_at.tzinfo is not None
+        and command.first_seen_at.utcoffset() is not None
+    )
+    last_seen_at_is_aware = (
+        command.last_seen_at.tzinfo is not None
+        and command.last_seen_at.utcoffset() is not None
+    )
+    if not first_seen_at_is_aware:
+        failures.append(ValidationFailure("first_seen_at", "must be timezone-aware"))
+    if not last_seen_at_is_aware:
+        failures.append(ValidationFailure("last_seen_at", "must be timezone-aware"))
+    if (
+        first_seen_at_is_aware
+        and last_seen_at_is_aware
+        and command.last_seen_at < command.first_seen_at
+    ):
+        failures.append(
+            ValidationFailure(
+                "last_seen_at",
+                "must not be earlier than first_seen_at",
+            )
+        )
+    if failures:
+        raise ValidationError(
+            "Invalid resource creation command",
+            failures=tuple(failures),
+        )
+
+
+def _require_active_catalog(
+    repository: object,
+    catalog_id: object,
+    *,
+    entity_type: str,
+    lookup_field: str,
+) -> None:
+    catalog = repository.get_by_id(catalog_id)
+    if catalog is None:
+        raise EntityNotFoundError(
+            f"{entity_type} not found",
+            entity_type=entity_type,
+            lookup_field=lookup_field,
+            lookup_value=catalog_id,
+        )
+    if not catalog.is_active:
+        raise ConflictError(
+            f"{entity_type} is inactive",
+            entity_type=entity_type,
+            conflict_field=lookup_field,
+            conflict_value=catalog_id,
+        )
 
 
 def _build_resource_details_result(

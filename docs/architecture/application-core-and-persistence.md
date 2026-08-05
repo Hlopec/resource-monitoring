@@ -127,7 +127,19 @@ The shared SQLAlchemy base repository exposes only internal primitives: attach a
 
 ## Command and Query Contracts
 
-Commands are immutable, technology-neutral data contracts. They carry validated or pre-validation input for a single application intent and do not contain business logic. They do not expose `execute()`, `commit()`, SQLAlchemy sessions, SQLAlchemy queries, FastAPI request objects, Pydantic models, or persistence implementations. The reference command is `EnsureResourceExistsCommand`, a narrow validation command used only to prove command-handler transaction rules.
+Commands are immutable, technology-neutral data contracts. They carry validated or pre-validation input for a single application intent and do not contain business logic. They do not expose `execute()`, `save()`, `commit()`, SQLAlchemy sessions, SQLAlchemy queries, FastAPI request objects, Pydantic models, broad dictionaries, ORM entity inputs, or persistence implementations. `EnsureResourceExistsCommand` is a narrow validation command used only to prove command-handler transaction rules. `CreateResourceCommand` is the first production write command and carries exactly the fields required to create a base `Resource` row:
+
+- `tenant_id: UUID`
+- `resource_type_id: UUID`
+- `canonical_name: str`
+- `display_name: str`
+- `lifecycle_status_id: UUID`
+- `criticality_id: UUID`
+- `exposure_level_id: UUID`
+- `source_priority: int`
+- `confidence_score: Decimal`
+- `first_seen_at: datetime`
+- `last_seen_at: datetime`
 
 Queries are immutable, technology-neutral read contracts. They carry lookup input for read-only handlers and do not expose SQLAlchemy `Result`, `Query`, `Select`, sessions, transactions, pagination frameworks, or specification objects. `GetResourceByIdQuery` is the narrow reference lookup from the architecture baseline. `GetResourceDetailsQuery` reads a full tenant-scoped resource projection by resource id. `GetResourceByCanonicalNameQuery` reads the same projection through the existing resource canonical-name repository contract.
 
@@ -148,12 +160,13 @@ Each handler execution creates exactly one Unit of Work by calling the injected 
 
 The first handlers are intentionally limited:
 
+- `CreateResourceHandler` validates `CreateResourceCommand`, creates one base `Resource`, adds it through `uow.resources`, materializes `ResourceCreatedResult`, and commits exactly once.
 - `GetResourceByIdHandler` reads `uow.resources.get_by_id(...)` and returns a typed `ResourceReadResult`.
 - `GetResourceDetailsHandler` reads `uow.resources.get_by_id(...)` and composes a fully materialized `ResourceDetailsResult`.
 - `GetResourceByCanonicalNameHandler` reads `uow.resources.get_by_canonical_name(...)` and composes the same `ResourceDetailsResult`.
 - `EnsureResourceExistsHandler` checks `uow.resources.exists(...)` and commits once only when the resource exists.
 
-They do not create resources, update resources, implement lifecycle transitions, close temporal facts, execute merges, resolve canonical lineage, expose APIs, or define business workflows.
+They do not update resources, implement lifecycle transitions, close temporal facts, create related facts, execute merges, resolve canonical lineage, expose APIs, or define broader onboarding workflows.
 
 ## UnitOfWorkFactory
 
@@ -170,6 +183,8 @@ The factory returns a fresh Unit of Work for one handler execution. The applicat
 ## Result Contracts
 
 Application results are immutable typed dataclasses. They are transport-neutral and contain explicit fields rather than `dict[str, Any]`, HTTP response objects, Pydantic models, SQLAlchemy `Row` values, sessions, or lazy query objects.
+
+`ResourceCreatedResult` is the first production write result. It is materialized before commit and contains `resource_id`, `tenant_id`, `canonical_name`, and `record_version`. The `Resource` id is generated in Python during mapped entity construction through the UUIDv7 mixin, and the initial resource `record_version` follows the current mapper policy of starting at `1`, so the create handler does not expose a generic application-level flush operation.
 
 `ResourceReadResult` is the narrow reference read result. `ResourceDetailsResult` is the first production read projection. It copies scalar resource fields and current related facts into immutable dataclasses:
 
@@ -201,6 +216,55 @@ Resource read handlers compose projections only through existing Unit of Work re
 Every repository call receives the explicit `tenant_id`. Wrong-tenant lookups raise the same `EntityNotFoundError` shape as absent resources so handlers do not leak resource existence across tenant boundaries. All projection fields are copied before the Unit of Work context exits, and no repository is accessed after exit.
 
 Pagination, search, filtering, resource lists, relationship graph expansion, canonical merge traversal, API serialization, and mutation workflows remain deferred.
+
+## Resource Creation Command
+
+`CreateResourceHandler` is the first production application-layer write use case. It creates only the base `Resource` row. It does not automatically create `ResourceState`, identifiers, ownership, classifications, labels, aliases, relationships, or merge lineage.
+
+Validation is deterministic and starts before a Unit of Work is created. The handler gathers command-only failures into one `ValidationError("Invalid resource creation command", failures=(...))` where practical:
+
+- `canonical_name` must not be blank or whitespace-only, and the accepted value is preserved exactly.
+- `display_name` must not be blank or whitespace-only because the current `Resource` model requires a non-null, non-blank display name.
+- `source_priority` must be between `0` and `1000`, matching the current model/database constraint.
+- `confidence_score` must be between `0` and `1`, matching the current `Numeric(5, 4)` model/database constraint.
+- `first_seen_at` and `last_seen_at` must be timezone-aware.
+- `last_seen_at` must not be earlier than `first_seen_at` when both timestamps are aware.
+
+After command-only validation, the handler opens one fresh Unit of Work through `UnitOfWorkFactory`. It validates tenant existence through `uow.tenants.get_by_id(...)`. It validates required managed catalogs through `uow.resource_types`, `uow.lifecycle_statuses`, `uow.criticalities`, and `uow.exposure_levels` using existing `get_by_id(...)` contracts. Missing references raise `EntityNotFoundError` with `entity_type`, `lookup_field`, and `lookup_value`. Inactive managed catalog references raise `ConflictError` with `entity_type`, `conflict_field`, and `conflict_value`; catalog rows are never created or reactivated by this use case.
+
+The canonical-name conflict guard is tenant-scoped and uses `uow.resources.get_by_canonical_name(command.tenant_id, command.canonical_name)`. It does not trim, lowercase, normalize, or globally search canonical names. Existing same-tenant matches raise `ConflictError`. The same canonical name in another tenant does not trigger the application pre-check. PostgreSQL constraints and foreign keys remain the concurrency-safe source of truth for races after application validation; full database exception translation remains deferred.
+
+The handler constructs the current mapped `Resource` entity explicitly, following the project policy that mapped entities may initially serve as application entity representations. It sets only command-supported fields, does not manually set the generated UUID, does not construct related facts, and does not call SQLAlchemy APIs. No application-facing repository flush is added: the resource id is available at construction time, and `ResourceCreatedResult` only includes fields that are safely known before commit.
+
+Successful create flow:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Handler as CreateResourceHandler
+    participant Factory as UnitOfWorkFactory
+    participant UOW as UnitOfWork
+    participant TenantRepo as TenantRepository
+    participant CatalogRepo as Catalog Repositories
+    participant ResourceRepo as ResourceRepository
+
+    Caller->>Handler: handle(CreateResourceCommand)
+    Handler->>Handler: validate command values
+    Handler->>Factory: __call__()
+    Factory-->>Handler: fresh UnitOfWork
+    Handler->>UOW: __enter__()
+    Handler->>TenantRepo: get_by_id(tenant_id)
+    Handler->>CatalogRepo: get_by_id(catalog ids)
+    Handler->>ResourceRepo: get_by_canonical_name(tenant_id, canonical_name)
+    Handler->>Handler: construct Resource
+    Handler->>ResourceRepo: add(resource)
+    Handler->>Handler: materialize ResourceCreatedResult
+    Handler->>UOW: commit()
+    Handler->>UOW: __exit__()
+    Handler-->>Caller: ResourceCreatedResult
+```
+
+Commit is the final meaningful operation. After `uow.commit()`, the handler does not access repositories, Unit of Work properties, `uow.session`, the `Resource` entity, or lazy attributes. Failures propagate without explicit handler rollback; cleanup remains the Unit of Work context manager's responsibility.
 
 ## Application Error Policy
 
@@ -416,6 +480,8 @@ Lineage repository tests verify protocol compatibility, injected-session usage, 
 
 Application service architecture tests verify immutable commands, immutable queries, immutable typed results, structural `UnitOfWorkFactory` compatibility, fresh Unit of Work creation per execution, command handler commit-on-success behavior, rollback on command validation failure, query handler no-commit behavior, rollback on query misses, technology-neutral validation failures, and reference handler compatibility with the existing SQLAlchemy Unit of Work through factory injection.
 
+Resource creation command tests verify the frozen command contract, immutable entity-free result, deterministic input validation before Unit of Work creation, tenant validation, managed catalog existence and active-state validation, tenant-scoped canonical-name conflict behavior, exact add and commit ordering, no flush, failure propagation and cleanup, PostgreSQL persistence, read-back through resource query handlers, cross-tenant canonical-name behavior, same-tenant duplicate pre-check behavior, and no partial resource rows after validation failures.
+
 Future repository implementation issues must add integration tests proving tenant isolation, transaction behavior, no repository-level commits, error translation, relationship loading behavior, and query shape for critical paths.
 
 ## Accepted Trade-Offs
@@ -424,7 +490,7 @@ The project remains synchronous because the current engine, sessions, tests, and
 
 ## Deferred Concerns
 
-Deferred work includes Label SQLAlchemy repository implementations; catalog mutation and catalog administration services; temporal fact replacement services; lineage services; real lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; persistence error translation matrix; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
+Deferred work includes Label SQLAlchemy repository implementations; resource update commands; temporal fact creation and replacement services; automatic state, identifier, ownership, classification, label, alias, relationship, and merge workflows; lineage services; lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; persistence error translation matrix; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
 
 ## Implementation Roadmap
 
@@ -437,8 +503,8 @@ Deferred work includes Label SQLAlchemy repository implementations; catalog muta
 7. `03.0.8` — Implement Temporal Fact Persistence
 8. `03.0.9` — Implement Alias and Merge Persistence
 9. `03.1.1` — Define Application Service and Command Architecture
-10. `03.1.2` — Implement Resource Lifecycle Application Services
-11. `03.1.3` — Expand Application DTOs and Result Types
+10. `03.1.2` — Implement Resource Read Application Queries
+11. `03.1.3` — Implement Resource Creation Application Command
 12. `03.1.4` — Implement Persistence Error Translation
 13. `03.1.5` — Implement Query Services and Pagination
 14. `03.1.6` — Harden Persistence Integration Tests

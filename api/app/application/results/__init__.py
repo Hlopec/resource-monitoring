@@ -3,6 +3,7 @@
 from app.application.results.resources import (
     ResourceAliasResult,
     ResourceClassificationResult,
+    ResourceCreatedResult,
     ResourceDetailsResult,
     ResourceIdentifierResult,
     ResourceLabelResult,
@@ -15,6 +16,7 @@ from app.application.results.resources import (
 __all__ = [
     "ResourceAliasResult",
     "ResourceClassificationResult",
+    "ResourceCreatedResult",
     "ResourceDetailsResult",
     "ResourceIdentifierResult",
     "ResourceLabelResult",

@@ -37,6 +37,19 @@ class EntityNotFoundError(ApplicationError):
 class ConflictError(ApplicationError):
     """An operation conflicts with an existing invariant or state."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        entity_type: str | None = None,
+        conflict_field: str | None = None,
+        conflict_value: object | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.entity_type = entity_type
+        self.conflict_field = conflict_field
+        self.conflict_value = conflict_value
+
 
 class ValidationError(ApplicationError):
     """Input command or query data failed application validation."""
