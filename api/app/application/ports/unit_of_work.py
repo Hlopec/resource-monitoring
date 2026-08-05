@@ -7,6 +7,10 @@ from app.application.ports.catalogs import (
     ClassificationValueRepository,
     ManagedCatalogRepository,
 )
+from app.application.ports.lineage import (
+    ResourceAliasRepository,
+    ResourceMergeRepository,
+)
 from app.application.ports.organizations import OrganizationRepository
 from app.application.ports.resources import ResourceRepository
 from app.application.ports.tenants import TenantRepository
@@ -58,6 +62,8 @@ class UnitOfWork(Protocol):
     resource_classifications: ResourceClassificationRepository
     resource_labels: ResourceLabelRepository
     resource_states: ResourceStateRepository
+    resource_aliases: ResourceAliasRepository
+    resource_merges: ResourceMergeRepository
 
     def __enter__(self) -> Self:
         """Open the Unit of Work and return the active instance."""

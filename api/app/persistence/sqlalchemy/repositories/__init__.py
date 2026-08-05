@@ -16,6 +16,10 @@ from app.persistence.sqlalchemy.repositories.helpers import (
     tenant_select,
     with_options,
 )
+from app.persistence.sqlalchemy.repositories.lineage import (
+    SQLAlchemyResourceAliasRepository,
+    SQLAlchemyResourceMergeRepository,
+)
 from app.persistence.sqlalchemy.repositories.organizations import (
     SQLAlchemyOrganizationRepository,
 )
@@ -39,9 +43,11 @@ __all__ = [
     "SQLAlchemyClassificationValueRepository",
     "SQLAlchemyManagedCatalogRepository",
     "SQLAlchemyOrganizationRepository",
+    "SQLAlchemyResourceAliasRepository",
     "SQLAlchemyResourceClassificationRepository",
     "SQLAlchemyResourceIdentifierRepository",
     "SQLAlchemyResourceLabelRepository",
+    "SQLAlchemyResourceMergeRepository",
     "SQLAlchemyResourceOwnershipRepository",
     "SQLAlchemyResourceRelationshipRepository",
     "SQLAlchemyResourceRepository",

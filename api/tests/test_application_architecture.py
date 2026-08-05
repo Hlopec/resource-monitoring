@@ -67,9 +67,11 @@ from app.persistence.sqlalchemy.repositories import (
     SQLAlchemyClassificationValueRepository,
     SQLAlchemyManagedCatalogRepository,
     SQLAlchemyOrganizationRepository,
+    SQLAlchemyResourceAliasRepository,
     SQLAlchemyResourceClassificationRepository,
     SQLAlchemyResourceIdentifierRepository,
     SQLAlchemyResourceLabelRepository,
+    SQLAlchemyResourceMergeRepository,
     SQLAlchemyResourceOwnershipRepository,
     SQLAlchemyResourceRelationshipRepository,
     SQLAlchemyResourceRepository,
@@ -97,9 +99,15 @@ FORBIDDEN_REPLACEMENT_METHODS = {
     "close_current",
     "close_current_and_add",
     "delete_history",
+    "merge_resources",
+    "move_alias",
     "remove",
     "replace_current",
+    "replace_alias",
+    "resolve",
+    "rewrite_lineage",
     "rewrite_history",
+    "unmerge_resources",
     "upsert_current",
 }
 FORBIDDEN_READ_ONLY_CATALOG_METHODS = FORBIDDEN_REPOSITORY_METHODS | {
@@ -123,6 +131,8 @@ CONCRETE_REPOSITORIES = (
     SQLAlchemyResourceClassificationRepository,
     SQLAlchemyResourceLabelRepository,
     SQLAlchemyResourceStateRepository,
+    SQLAlchemyResourceAliasRepository,
+    SQLAlchemyResourceMergeRepository,
 )
 TENANT_SCOPED_REPOSITORIES = (
     OrganizationRepository,
@@ -265,6 +275,8 @@ def test_unit_of_work_protocol_exposes_technology_neutral_repositories() -> None
     assert hints["resource_classifications"] is ResourceClassificationRepository
     assert hints["resource_labels"] is ResourceLabelRepository
     assert hints["resource_states"] is ResourceStateRepository
+    assert hints["resource_aliases"] is ResourceAliasRepository
+    assert hints["resource_merges"] is ResourceMergeRepository
 
 
 def test_repository_protocols_do_not_expose_optional_tenant_scope() -> None:
