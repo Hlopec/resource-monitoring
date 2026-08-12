@@ -439,6 +439,7 @@ def test_inactive_catalog_stops_before_state_mutation(flag: str) -> None:
 def test_first_state_creation_adds_one_current_state_and_commits_last() -> None:
     command = _command(source=None)
     uow = _uow_for_command(command, current_state=None)
+    original_last_seen_at = uow.resource.last_seen_at
     handler = TransitionResourceStateHandler(FakeUnitOfWorkFactory(uow))
 
     result = handler.handle(command)
@@ -454,7 +455,11 @@ def test_first_state_creation_adds_one_current_state_and_commits_last() -> None:
     assert new_state.valid_to is None
     assert new_state.source is None
     assert uow.resource.lifecycle_status_id == command.lifecycle_status_id
-    assert uow.resource.last_seen_at == command.transitioned_at
+    assert uow.resource.criticality_id == command.criticality_id
+    assert uow.resource.exposure_level_id == command.exposure_level_id
+    assert uow.resource.source_priority == command.source_priority
+    assert uow.resource.confidence_score == command.confidence_score
+    assert uow.resource.last_seen_at == original_last_seen_at
     assert uow.commits == 1
     assert uow.resource_states.flushes == 0
     assert uow.events == [
@@ -660,6 +665,9 @@ def test_sqlalchemy_first_state_transition_persists_and_reads_back(
         tenant_id, resource_id, lifecycle_id, criticality_id, exposure_id, _ = (
             _seed_resource(setup_session)
         )
+        resource = setup_session.get(Resource, resource_id)
+        assert resource is not None
+        original_last_seen_at = resource.last_seen_at
         setup_session.commit()
     command = _command(
         tenant_id=tenant_id,
@@ -684,7 +692,11 @@ def test_sqlalchemy_first_state_transition_persists_and_reads_back(
         assert state.source == command.source
         assert resource is not None
         assert resource.lifecycle_status_id == command.lifecycle_status_id
-        assert resource.last_seen_at == command.transitioned_at
+        assert resource.criticality_id == command.criticality_id
+        assert resource.exposure_level_id == command.exposure_level_id
+        assert resource.source_priority == command.source_priority
+        assert resource.confidence_score == command.confidence_score
+        assert resource.last_seen_at == original_last_seen_at
         assert _current_state_count(verification, tenant_id, resource_id) == 1
 
     details = GetResourceDetailsHandler(lambda: SQLAlchemyUnitOfWork(SessionLocal)).handle(

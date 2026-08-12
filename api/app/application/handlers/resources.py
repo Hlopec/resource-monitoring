@@ -263,7 +263,6 @@ class TransitionResourceStateHandler:
             resource.exposure_level_id = command.exposure_level_id
             resource.source_priority = command.source_priority
             resource.confidence_score = command.confidence_score
-            resource.last_seen_at = command.transitioned_at
             uow.resource_states.add(new_state)
             result = ResourceStateTransitionedResult(
                 resource_id=command.resource_id,
