@@ -14,6 +14,7 @@ from app.application.results.resources import (
     ResourceOwnershipAssignedResult,
     ResourceOwnershipResult,
     ResourceReadResult,
+    ResourceRelationshipAssignedResult,
     ResourceStateTransitionedResult,
     ResourceStateResult,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "ResourceOwnershipAssignedResult",
     "ResourceOwnershipResult",
     "ResourceReadResult",
+    "ResourceRelationshipAssignedResult",
     "ResourceStateTransitionedResult",
     "ResourceStateResult",
 ]

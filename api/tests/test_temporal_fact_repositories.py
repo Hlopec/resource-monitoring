@@ -642,8 +642,53 @@ def test_relationship_current_reads_preserve_incoming_and_outgoing_semantics(
     assert repository.list_current_incoming(refs.tenant_id, refs.resource_id) == [
         incoming
     ]
+    assert (
+        repository.find_current(
+            refs.tenant_id,
+            refs.resource_id,
+            refs.relationship_type_id,
+            refs.target_resource_id,
+        )
+        is outgoing
+    )
     assert repository.list_current_outgoing(refs.other_tenant_id, refs.resource_id) == []
     assert repository.list_current_incoming(refs.other_tenant_id, refs.resource_id) == []
+    assert (
+        repository.find_current(
+            refs.other_tenant_id,
+            refs.resource_id,
+            refs.relationship_type_id,
+            refs.target_resource_id,
+        )
+        is None
+    )
+    assert (
+        repository.find_current(
+            refs.tenant_id,
+            refs.other_resource_id,
+            refs.relationship_type_id,
+            refs.resource_id,
+        )
+        is incoming
+    )
+    assert (
+        repository.find_current(
+            refs.tenant_id,
+            refs.resource_id,
+            uuid4(),
+            refs.target_resource_id,
+        )
+        is None
+    )
+    assert (
+        repository.find_current(
+            refs.tenant_id,
+            refs.resource_id,
+            refs.relationship_type_id,
+            refs.other_resource_id,
+        )
+        is None
+    )
 
 
 def test_classification_current_reads_are_tenant_scoped_and_primary_aware(

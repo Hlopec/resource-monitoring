@@ -9,6 +9,7 @@ from app.application.commands import (
     AssignResourceIdentifierCommand,
     AssignResourceLabelCommand,
     AssignResourceOwnershipCommand,
+    AssignResourceRelationshipCommand,
     CreateResourceCommand,
     EnsureResourceExistsCommand,
     TransitionResourceStateCommand,
@@ -39,6 +40,7 @@ from app.application.results import (
     ResourceOwnershipAssignedResult,
     ResourceOwnershipResult,
     ResourceReadResult,
+    ResourceRelationshipAssignedResult,
     ResourceStateTransitionedResult,
     ResourceStateResult,
 )
@@ -48,6 +50,7 @@ from app.models import (
     ResourceIdentifier,
     ResourceLabel,
     ResourceOwnership,
+    ResourceRelationship,
     ResourceState,
 )
 
@@ -465,6 +468,94 @@ class AssignResourceOwnershipHandler:
             return result
 
 
+class AssignResourceRelationshipHandler:
+    """Command handler for assigning one current relationship between resources."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def handle(
+        self,
+        command: AssignResourceRelationshipCommand,
+    ) -> ResourceRelationshipAssignedResult:
+        """Append one directed relationship fact, commit once, and return a result."""
+        _validate_assign_resource_relationship_command(command)
+        with self._uow_factory() as uow:
+            for resource_id in sorted(
+                (command.source_resource_id, command.target_resource_id),
+                key=str,
+            ):
+                resource = uow.resources.get_for_update(command.tenant_id, resource_id)
+                if resource is None:
+                    if resource_id == command.source_resource_id:
+                        raise EntityNotFoundError(
+                            "Resource not found",
+                            entity_type="Resource",
+                            lookup_field="source_resource_id",
+                            lookup_value=command.source_resource_id,
+                        )
+                    raise EntityNotFoundError(
+                        "Resource not found",
+                        entity_type="Resource",
+                        lookup_field="target_resource_id",
+                        lookup_value=command.target_resource_id,
+                    )
+
+            relationship_type = uow.relationship_types.get_by_id(
+                command.relationship_type_id,
+            )
+            if relationship_type is None:
+                raise EntityNotFoundError(
+                    "RelationshipType not found",
+                    entity_type="RelationshipType",
+                    lookup_field="relationship_type_id",
+                    lookup_value=command.relationship_type_id,
+                )
+            if not relationship_type.is_active:
+                raise ConflictError(
+                    "RelationshipType is inactive",
+                    entity_type="RelationshipType",
+                    conflict_field="relationship_type_id",
+                    conflict_value=command.relationship_type_id,
+                )
+
+            current_relationship = uow.resource_relationships.find_current(
+                command.tenant_id,
+                command.source_resource_id,
+                command.relationship_type_id,
+                command.target_resource_id,
+            )
+            if current_relationship is not None:
+                raise ConflictError(
+                    "Resource relationship is already assigned",
+                    entity_type="ResourceRelationship",
+                    conflict_field="current",
+                    conflict_value=command.relationship_type_id,
+                )
+
+            relationship = ResourceRelationship(
+                tenant_id=command.tenant_id,
+                source_resource_id=command.source_resource_id,
+                target_resource_id=command.target_resource_id,
+                relationship_type_id=command.relationship_type_id,
+                confidence_score=command.confidence_score,
+                valid_from=command.valid_from,
+                valid_to=None,
+                source=command.source,
+            )
+            uow.resource_relationships.add(relationship)
+            result = ResourceRelationshipAssignedResult(
+                relationship_id=relationship.id,
+                source_resource_id=command.source_resource_id,
+                relationship_type_id=command.relationship_type_id,
+                target_resource_id=command.target_resource_id,
+                valid_from=command.valid_from,
+                source=command.source,
+            )
+            uow.commit()
+            return result
+
+
 class AssignResourceClassificationHandler:
     """Command handler for assigning one current classification to a resource."""
 
@@ -729,6 +820,38 @@ def _validate_assign_resource_classification_command(
     if failures:
         raise ValidationError(
             "Invalid resource classification assignment command",
+            failures=tuple(failures),
+        )
+
+
+def _validate_assign_resource_relationship_command(
+    command: AssignResourceRelationshipCommand,
+) -> None:
+    failures: list[ValidationFailure] = []
+    if command.source_resource_id == command.target_resource_id:
+        failures.append(
+            ValidationFailure(
+                "target_resource_id",
+                "must differ from source_resource_id",
+            )
+        )
+    if command.confidence_score < Decimal("0") or command.confidence_score > Decimal(
+        "1"
+    ):
+        failures.append(
+            ValidationFailure("confidence_score", "must be between 0 and 1")
+        )
+    valid_from_is_aware = (
+        command.valid_from.tzinfo is not None
+        and command.valid_from.utcoffset() is not None
+    )
+    if not valid_from_is_aware:
+        failures.append(ValidationFailure("valid_from", "must be timezone-aware"))
+    if command.source is not None and command.source.strip() == "":
+        failures.append(ValidationFailure("source", "must not be blank when provided"))
+    if failures:
+        raise ValidationError(
+            "Invalid resource relationship assignment command",
             failures=tuple(failures),
         )
 

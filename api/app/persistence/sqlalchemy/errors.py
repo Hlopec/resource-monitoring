@@ -55,6 +55,11 @@ CONSTRAINT_TRANSLATORS: dict[str, Callable[[str], ConflictError]] = {
         entity_type="ResourceOwnership",
         conflict_field="current_primary",
     ),
+    "uq_resource_relationship_current": _conflict(
+        "Resource relationship conflicts with an existing current relationship",
+        entity_type="ResourceRelationship",
+        conflict_field="current",
+    ),
     "uq_resource_classification_current_value": _conflict(
         "Resource classification conflicts with an existing current classification",
         entity_type="ResourceClassification",

@@ -102,7 +102,7 @@ The Resource Inventory repository inventory is:
 | `ClassificationValueRepository` | No | Classification values scoped by classification type | Read-only |
 | `ResourceIdentifierRepository` | Yes | Current identifier lookup by resource or normalized value | `add` |
 | `ResourceOwnershipRepository` | Yes | Current ownership and current-primary ownership lookup | `add` |
-| `ResourceRelationshipRepository` | Yes | Current incoming/outgoing resource relationships | `add` |
+| `ResourceRelationshipRepository` | Yes | Current incoming/outgoing resource relationships and exact current directed-edge lookup | `add` |
 | `ResourceClassificationRepository` | Yes | Current classifications and current-primary classification lookup | `add` |
 | `ResourceLabelRepository` | Yes | Current resource label assignments | `add` |
 | `ResourceStateRepository` | Yes | Current state and state history access | `add` |
@@ -435,6 +435,51 @@ sequenceDiagram
     Handler-->>Caller: ResourceOwnershipAssignedResult
 ```
 
+## Resource Relationship Assignment Command
+
+`AssignResourceRelationshipHandler` appends one current `ResourceRelationship` fact between two existing tenant-owned resources. This use case is assignment only: it does not replace relationships, expire relationships, remove relationships, generate inverse rows, expand transitive edges, traverse graphs, close current rows, delete history, add API schemas, or introduce a generic temporal mutation abstraction.
+
+`AssignResourceRelationshipCommand` is an immutable transport-neutral dataclass with the actual fields required by the current `ResourceRelationship` model: `tenant_id`, `source_resource_id`, `relationship_type_id`, `target_resource_id`, `confidence_score`, `valid_from`, and nullable `source`. The command does not carry `first_seen_at`, `last_seen_at`, `attributes`, inverse semantics, or graph traversal options because the mapped relationship table does not contain those fields.
+
+Validation starts before a Unit of Work is created. The handler rejects command-only failures with `ValidationError("Invalid resource relationship assignment command", failures=(...))`: `source_resource_id` and `target_resource_id` must differ; `confidence_score` must be between `0` and `1`; `valid_from` must be timezone-aware; and `source` may be `None` but must not be blank when provided. Self-reference rejection is performed before opening a Unit of Work and is also protected by the database check constraint.
+
+After command-only validation, the handler opens one fresh Unit of Work and locks both tenant-scoped endpoint resources through `uow.resources.get_for_update(tenant_id, resource_id)`. To avoid opposite-direction deadlock patterns, endpoint resource ids are sorted by stable UUID string for lock acquisition. This lock order is independent of relationship direction: the persisted row still preserves the command's original `source_resource_id -> target_resource_id` semantics. Missing or wrong-tenant endpoints raise `EntityNotFoundError("Resource not found", entity_type="Resource", lookup_field="source_resource_id" | "target_resource_id", lookup_value=...)` according to the semantic command role, not lock order. The handler performs no relationship type lookup, relationship lookup, add, or commit after an endpoint miss.
+
+The handler validates `RelationshipType` through `uow.relationship_types.get_by_id(relationship_type_id)`. Missing types raise `EntityNotFoundError`; inactive types raise `ConflictError`; neither path mutates relationships. `RelationshipType` currently exposes optional `source_type_constraint` and `target_type_constraint` strings, but the schema and application layer do not define a deterministic interpreter that maps those strings to `Resource.resource_type_id` or catalog codes. The assignment command therefore does not invent endpoint type-constraint enforcement; a future workflow can add a documented constraint language and tests if needed.
+
+Current duplicate checks use `uow.resource_relationships.find_current(tenant_id, source_resource_id, relationship_type_id, target_resource_id)`. If an equivalent current directed relationship already exists, the handler raises `ConflictError("Resource relationship is already assigned", entity_type="ResourceRelationship", conflict_field="current", conflict_value=relationship_type_id)` and creates no redundant history row. Reverse direction is not a duplicate: `A -> B` and `B -> A` are distinct directed facts. The same endpoints with a different relationship type are also distinct facts.
+
+On success, the handler constructs exactly one `ResourceRelationship` with `valid_from=command.valid_from` and `valid_to=None`, adds it through `uow.resource_relationships.add(...)`, materializes `ResourceRelationshipAssignedResult`, and calls `uow.commit()` exactly once as the final meaningful operation. It does not call `flush()` because relationship ids are Python-generated and no server-generated fields are needed for the result. After commit it does not access repositories, Unit of Work properties, entities, or lazy attributes. Failures propagate without explicit handler rollback; Unit of Work cleanup owns rollback and session closure. Commit-time persistence translation remains available for relationship uniqueness races through `uq_resource_relationship_current`.
+
+Successful relationship assignment flow:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Handler as AssignResourceRelationshipHandler
+    participant Factory as UnitOfWorkFactory
+    participant UOW as UnitOfWork
+    participant ResourceRepo as ResourceRepository
+    participant TypeRepo as RelationshipTypeRepository
+    participant RelationshipRepo as ResourceRelationshipRepository
+
+    Caller->>Handler: handle(AssignResourceRelationshipCommand)
+    Handler->>Handler: validate command values
+    Handler->>Factory: __call__()
+    Factory-->>Handler: fresh UnitOfWork
+    Handler->>UOW: __enter__()
+    Handler->>ResourceRepo: get_for_update(tenant_id, lower_endpoint_id)
+    Handler->>ResourceRepo: get_for_update(tenant_id, higher_endpoint_id)
+    Handler->>TypeRepo: get_by_id(relationship_type_id)
+    Handler->>RelationshipRepo: find_current(...)
+    Handler->>Handler: construct ResourceRelationship
+    Handler->>RelationshipRepo: add(relationship)
+    Handler->>Handler: materialize ResourceRelationshipAssignedResult
+    Handler->>UOW: commit()
+    Handler->>UOW: __exit__()
+    Handler-->>Caller: ResourceRelationshipAssignedResult
+```
+
 ## Resource Classification Assignment Command
 
 `AssignResourceClassificationHandler` appends one current `ResourceClassification` fact for an existing resource. This use case is assignment only: it does not replace classifications, expire classifications, transfer classifications, demote existing primary classifications, close current rows, delete history, create catalog rows, add API schemas, or introduce a generic temporal mutation abstraction.
@@ -677,7 +722,7 @@ Tenant-scoped repository infrastructure requires explicit `tenant_id` for tenant
 
 All current managed catalog models use `code` and `is_active`; none define `sort_order`. Active-list methods therefore filter on `is_active IS true` and order by `code, id`. Classification-value active lists also filter by `classification_type_id`, exclude values from other types, and use the same `code, id` ordering within the type. Seeded rows are read through these repositories by their deterministic codes and UUIDs; the adapters do not duplicate seed data, alter seed codes, or expose catalog mutation.
 
-Temporal fact repositories use `TenantScopedSQLAlchemyRepository` and the schema's current-row predicate, `valid_to IS NULL`. Current methods apply tenant scope plus their exact resource, value, role, type, label, or endpoint predicates and never load all history for Python-side filtering. Identifier lookup includes exact current value lookup and current primary lookup for the schema-defined `tenant_id`, `resource_id`, and `identifier_type_id` primary scope. Ownership lookup includes exact current resource/organization/role lookup and current primary lookup for the schema-defined `tenant_id`, `resource_id`, and `ownership_role_id` primary scope. Classification lookup includes exact current resource/type/value lookup and current primary lookup for the schema-defined `tenant_id`, `resource_id`, and `classification_type_id` primary scope. Label assignment lookup includes exact current resource/label lookup for the schema-defined `tenant_id`, `resource_id`, and `label_id` uniqueness scope. State history uses the contract's only current history method and returns closed and current rows ordered by `valid_from, id`; other temporal contracts do not currently expose history methods. Current collection ordering is deterministic: identifiers by `identifier_type_id, namespace, normalized_value, id`; ownership by `ownership_role_id, is_primary DESC, organization_id, id`; outgoing relationships by `relationship_type_id, target_resource_id, id`; incoming relationships by `relationship_type_id, source_resource_id, id`; classifications by `classification_type_id, classification_value_id, id`; labels by `label_id, id`.
+Temporal fact repositories use `TenantScopedSQLAlchemyRepository` and the schema's current-row predicate, `valid_to IS NULL`. Current methods apply tenant scope plus their exact resource, value, role, type, label, or endpoint predicates and never load all history for Python-side filtering. Identifier lookup includes exact current value lookup and current primary lookup for the schema-defined `tenant_id`, `resource_id`, and `identifier_type_id` primary scope. Ownership lookup includes exact current resource/organization/role lookup and current primary lookup for the schema-defined `tenant_id`, `resource_id`, and `ownership_role_id` primary scope. Relationship lookup includes exact current directed source/type/target lookup for the schema-defined `tenant_id`, `source_resource_id`, `target_resource_id`, and `relationship_type_id` uniqueness scope. Classification lookup includes exact current resource/type/value lookup and current primary lookup for the schema-defined `tenant_id`, `resource_id`, and `classification_type_id` primary scope. Label assignment lookup includes exact current resource/label lookup for the schema-defined `tenant_id`, `resource_id`, and `label_id` uniqueness scope. State history uses the contract's only current history method and returns closed and current rows ordered by `valid_from, id`; other temporal contracts do not currently expose history methods. Current collection ordering is deterministic: identifiers by `identifier_type_id, namespace, normalized_value, id`; ownership by `ownership_role_id, is_primary DESC, organization_id, id`; outgoing relationships by `relationship_type_id, target_resource_id, id`; incoming relationships by `relationship_type_id, source_resource_id, id`; classifications by `classification_type_id, classification_value_id, id`; labels by `label_id, id`.
 
 Temporal adapters are append/read only. `add(...)` attaches the new fact to the active Unit of Work session and does not flush automatically. Repositories do not close prior current rows, rewrite or delete history, validate state transitions, traverse organization hierarchies, resolve relationship graphs, create labels, mutate catalogs, translate database errors, or retry failed transactions. PostgreSQL constraints remain the source of truth for one-current-row rules, temporal interval validity, tenant-consistent resource references, relationship endpoint validity, classification type/value integrity, label assignment integrity, and original `IntegrityError` propagation.
 
@@ -787,7 +832,7 @@ The project remains synchronous because the current engine, sessions, tests, and
 
 ## Deferred Concerns
 
-Deferred work includes Label SQLAlchemy repository implementations; resource update commands; identifier replacement, expiration, removal, reassignment, and primary-demotion workflows; ownership replacement, expiration, removal, transfer, and primary-demotion workflows; classification replacement, expiration, removal, transfer, and primary-demotion workflows; temporal fact creation and replacement services beyond resource state, identifier assignment, ownership assignment, and classification assignment; automatic label, alias, relationship, and merge workflows; lineage services; broader lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; expanded persistence error translation mappings as new named constraints become use-case relevant; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; deterministic multi-session lock timing tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
+Deferred work includes resource update commands; identifier replacement, expiration, removal, reassignment, and primary-demotion workflows; ownership replacement, expiration, removal, transfer, and primary-demotion workflows; relationship replacement, expiration, removal, inverse-edge handling, endpoint type-constraint policy, graph traversal, and transitive expansion workflows; classification replacement, expiration, removal, transfer, and primary-demotion workflows; temporal fact creation and replacement services beyond resource state, identifier assignment, ownership assignment, relationship assignment, classification assignment, and label assignment; automatic label, alias, relationship, and merge workflows; lineage services; broader lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; expanded persistence error translation mappings as new named constraints become use-case relevant; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; deterministic multi-session lock timing tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
 
 ## Implementation Roadmap
 

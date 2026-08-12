@@ -103,6 +103,16 @@ class ResourceRelationshipRepository(Protocol):
         """Return current incoming relationships for a target resource."""
         ...
 
+    def find_current(
+        self,
+        tenant_id: UUID,
+        source_resource_id: UUID,
+        relationship_type_id: UUID,
+        target_resource_id: UUID,
+    ) -> ResourceRelationship | None:
+        """Return a current relationship by source, type, and target."""
+        ...
+
     def add(self, relationship: ResourceRelationship) -> None:
         """Add a relationship row to the current Unit of Work."""
         ...

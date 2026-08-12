@@ -207,6 +207,23 @@ class SQLAlchemyResourceRelationshipRepository(
             )
         )
 
+    def find_current(
+        self,
+        tenant_id: UUID,
+        source_resource_id: UUID,
+        relationship_type_id: UUID,
+        target_resource_id: UUID,
+    ) -> ResourceRelationship | None:
+        return self._scalar(
+            current_temporal_statement(self, tenant_id)
+            .where(
+                ResourceRelationship.source_resource_id == source_resource_id,
+                ResourceRelationship.relationship_type_id == relationship_type_id,
+                ResourceRelationship.target_resource_id == target_resource_id,
+            )
+            .order_by(ResourceRelationship.id)
+        )
+
 
 class SQLAlchemyResourceClassificationRepository(
     TenantScopedSQLAlchemyRepository[ResourceClassification],
