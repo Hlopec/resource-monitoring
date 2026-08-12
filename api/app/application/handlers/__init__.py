@@ -13,6 +13,7 @@ from app.application.handlers.resources import (
     GetResourceByCanonicalNameHandler,
     GetResourceByIdHandler,
     GetResourceDetailsHandler,
+    MergeResourceHandler,
     TransitionResourceStateHandler,
 )
 
@@ -29,6 +30,7 @@ __all__ = [
     "GetResourceByCanonicalNameHandler",
     "GetResourceByIdHandler",
     "GetResourceDetailsHandler",
+    "MergeResourceHandler",
     "QueryHandler",
     "TransitionResourceStateHandler",
 ]

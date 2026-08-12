@@ -93,6 +93,18 @@ class ResourceAliasAssignedResult:
 
 
 @dataclass(frozen=True)
+class ResourceMergedResult:
+    """Result returned after a resource merge lineage edge is committed."""
+
+    merge_id: UUID
+    source_resource_id: UUID
+    target_resource_id: UUID
+    merged_at: datetime
+    reason: str | None
+    source: str | None
+
+
+@dataclass(frozen=True)
 class ResourceClassificationAssignedResult:
     """Result returned after a resource classification assignment is committed."""
 

@@ -30,6 +30,7 @@ from app.application.handlers import (
     GetResourceByCanonicalNameHandler,
     GetResourceByIdHandler,
     GetResourceDetailsHandler,
+    MergeResourceHandler,
     QueryHandler,
     TransitionResourceStateHandler,
 )
@@ -471,6 +472,7 @@ def test_reference_handlers_depend_on_unit_of_work_factory_only() -> None:
         GetResourceByCanonicalNameHandler,
         GetResourceByIdHandler,
         GetResourceDetailsHandler,
+        MergeResourceHandler,
         TransitionResourceStateHandler,
     ):
         hints = get_type_hints(handler_type.__init__)

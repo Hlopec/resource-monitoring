@@ -106,6 +106,18 @@ class AssignResourceAliasCommand:
 
 
 @dataclass(frozen=True)
+class MergeResourceCommand:
+    """Command to record one immutable merge lineage edge."""
+
+    tenant_id: UUID
+    source_resource_id: UUID
+    target_resource_id: UUID
+    reason: str | None
+    source: str | None
+    merged_at: datetime
+
+
+@dataclass(frozen=True)
 class AssignResourceClassificationCommand:
     """Command to append one current classification row for a resource."""
 

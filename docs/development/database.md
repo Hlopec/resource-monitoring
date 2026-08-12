@@ -284,6 +284,14 @@ Tenant isolation is enforced with composite foreign keys from `(tenant_id, sourc
 
 The database rejects self-merges with `source_resource_id <> target_resource_id` and rejects empty `reason` or `source` when those fields are present. The `prevent_resource_merge_cycle()` trigger function and `trg_resource_merge_prevent_cycle` trigger prevent direct and indirect cycles before insert and before endpoint updates. The trigger traversal is scoped to `tenant_id`, follows outgoing merge edges from the proposed target, uses a visited path plus depth limit, and raises a clear PostgreSQL exception when the proposed source is encountered.
 
+`MergeResourceCommand` is the current application-layer lineage execution workflow for this table. The command fields are `tenant_id`, `source_resource_id`, `target_resource_id`, nullable `reason`, nullable `source`, and `merged_at`.
+
+The handler validates command-only values before opening a Unit of Work: direct self-merge is rejected, `merged_at` must be timezone-aware, and non-null `reason` and `source` must not be blank. It then locks both endpoint resources with `ResourceRepository.get_for_update(...)` in stable UUID string order to avoid opposite-direction lock-order deadlocks. Physical lock order does not change source -> target merge direction; the inserted `ResourceMerge.target_resource_id` is the immediate requested target, not automatically the terminal canonical resource.
+
+Before insert, the handler checks `ResourceMergeRepository.get_outgoing_merge(...)` for the source. An existing outgoing merge raises a conflict and is not replaced, redirected, or deleted. A target that is already merged onward is allowed, so `B -> C` followed by `A -> B` records a valid chain. The handler does not recursively resolve or compress that chain.
+
+Successful merge execution appends exactly one immutable `ResourceMerge`, materializes the result before commit, does not call explicit flush, and commits once as the final meaningful operation. It does not migrate aliases, identifiers, ownership, classifications, labels, relationships, state, or other resource facts, and it does not mutate source or target resource snapshot fields. Duplicate-source races are enforced by `uq_resource_merge_tenant_source_resource_id` and translated by `SQLAlchemyUnitOfWork.commit()`. Indirect cycle failures remain guarded by the PostgreSQL trigger; the application does not parse trigger messages or add a recursive graph service.
+
 Canonical resolution remains derived rather than materialized on `resource`. A tenant-scoped recursive CTE can resolve a chain such as `A -> B -> C` to `C` while returning the input resource when it has no outgoing merge:
 
 ```sql
