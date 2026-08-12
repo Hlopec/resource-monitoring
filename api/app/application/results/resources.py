@@ -105,6 +105,18 @@ class ResourceMergedResult:
 
 
 @dataclass(frozen=True)
+class CanonicalResourceResolvedResult:
+    """Result returned after resolving direct merge lineage."""
+
+    requested_resource_id: UUID
+    canonical_resource_id: UUID
+    immediate_target_resource_id: UUID | None
+    merge_depth: int
+    is_canonical: bool
+    canonical_resource: ResourceReadResult
+
+
+@dataclass(frozen=True)
 class ResourceClassificationAssignedResult:
     """Result returned after a resource classification assignment is committed."""
 

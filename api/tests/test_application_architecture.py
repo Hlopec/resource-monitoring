@@ -32,6 +32,7 @@ from app.application.handlers import (
     GetResourceDetailsHandler,
     MergeResourceHandler,
     QueryHandler,
+    ResolveCanonicalResourceHandler,
     TransitionResourceStateHandler,
 )
 from app.application.ports import UnitOfWorkFactory
@@ -473,6 +474,7 @@ def test_reference_handlers_depend_on_unit_of_work_factory_only() -> None:
         GetResourceByIdHandler,
         GetResourceDetailsHandler,
         MergeResourceHandler,
+        ResolveCanonicalResourceHandler,
         TransitionResourceStateHandler,
     ):
         hints = get_type_hints(handler_type.__init__)
@@ -481,6 +483,20 @@ def test_reference_handlers_depend_on_unit_of_work_factory_only() -> None:
             "self",
             "uow_factory",
         ]
+
+
+def test_canonical_resolution_handler_is_read_only() -> None:
+    source = inspect.getsource(ResolveCanonicalResourceHandler)
+    tree = ast.parse(source)
+    called_methods = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+    assert "commit" not in called_methods
+    assert "get_for_update" not in called_methods
+    assert ".add(" not in source.replace("visited.add(", "")
 
 
 def test_collection_repository_methods_return_sequence() -> None:

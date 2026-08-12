@@ -100,7 +100,11 @@ Merge lineage is separate from `resource_relationship`. Relationships model doma
 
 Tenant isolation is enforced with composite foreign keys from `(tenant_id, source_resource_id)` and `(tenant_id, target_resource_id)` to `resource(tenant_id, id)`. The database rejects self-merges, empty `reason`, empty `source`, cross-tenant endpoints, duplicate outgoing edges, and direct or indirect cycles through the `prevent_resource_merge_cycle()` trigger function and `trg_resource_merge_prevent_cycle` trigger. The trigger traverses outgoing merge edges within the same tenant before insert and before endpoint updates. Opposing concurrent inserts can still require future service-layer serialization or advisory locking; that concurrency policy is deliberately outside this issue.
 
-Canonical resource resolution can be derived with a tenant-scoped recursive CTE:
+Canonical resource resolution is derived rather than stored. The application resolver currently derives it by validating the requested tenant-owned resource, following direct tenant-scoped outgoing `resource_merge` edges, and loading the terminal resource. It reports the first immediate target separately from the terminal canonical target, returns the input resource for an unmerged resource, follows `A -> B -> C` to `C`, ignores incoming branches, and remains read-only: it does not rewrite lineage, compress paths, cache canonical ids, migrate facts, or delete source resources.
+
+The application resolver also includes defensive guards around corrupt lineage: a per-invocation visited set for cycles, a maximum depth of 64 traversed edges with rejection before a 65th traversal, tenant-scoped lookup at every step, and a conflict if a terminal target is missing despite the schema's foreign-key expectations.
+
+A tenant-scoped recursive CTE remains a possible future optimization for the same derivation:
 
 ```sql
 WITH RECURSIVE lineage(resource_id, path, depth) AS (
@@ -126,7 +130,7 @@ ORDER BY depth DESC
 LIMIT 1;
 ```
 
-When no outgoing merge exists, the CTE returns the input resource. For a valid chain such as `A -> B -> C`, it returns `C`. Future service-layer canonicalization can wrap this query and define serialization, conflict handling, alias transfer policy, and user workflow. This schema does not automatically move aliases, rewrite identifiers, transfer relationships, delete source resources, or resolve alias conflicts.
+When no outgoing merge exists, the CTE returns the input resource. For a valid chain such as `A -> B -> C`, it returns `C`. Future service-layer canonicalization can wrap this query and define serialization, conflict handling, alias transfer policy, and user workflow. This schema does not automatically move aliases, rewrite identifiers, transfer relationships, delete source resources, cache canonical targets, compress paths, or resolve alias conflicts.
 
 ## Type-specific extension entities
 

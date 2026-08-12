@@ -28,3 +28,11 @@ class GetResourceByCanonicalNameQuery:
 
     tenant_id: UUID
     canonical_name: str
+
+
+@dataclass(frozen=True)
+class ResolveCanonicalResourceQuery:
+    """Query for resolving a resource through direct merge lineage."""
+
+    tenant_id: UUID
+    resource_id: UUID

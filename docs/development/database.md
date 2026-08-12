@@ -290,9 +290,13 @@ The handler validates command-only values before opening a Unit of Work: direct 
 
 Before insert, the handler checks `ResourceMergeRepository.get_outgoing_merge(...)` for the source. An existing outgoing merge raises a conflict and is not replaced, redirected, or deleted. A target that is already merged onward is allowed, so `B -> C` followed by `A -> B` records a valid chain. The handler does not recursively resolve or compress that chain.
 
-Successful merge execution appends exactly one immutable `ResourceMerge`, materializes the result before commit, does not call explicit flush, and commits once as the final meaningful operation. It does not migrate aliases, identifiers, ownership, classifications, labels, relationships, state, or other resource facts, and it does not mutate source or target resource snapshot fields. Duplicate-source races are enforced by `uq_resource_merge_tenant_source_resource_id` and translated by `SQLAlchemyUnitOfWork.commit()`. Indirect cycle failures remain guarded by the PostgreSQL trigger; the application does not parse trigger messages or add a recursive graph service.
+Successful merge execution appends exactly one immutable `ResourceMerge`, materializes the result before commit, does not call explicit flush, and commits once as the final meaningful operation. It does not migrate aliases, identifiers, ownership, classifications, labels, relationships, state, or other resource facts, and it does not mutate source or target resource snapshot fields. Duplicate-source races are enforced by `uq_resource_merge_tenant_source_resource_id` and translated by `SQLAlchemyUnitOfWork.commit()`. Indirect cycle failures remain guarded by the PostgreSQL trigger; the merge command does not parse trigger messages or recursively resolve the canonical target.
 
-Canonical resolution remains derived rather than materialized on `resource`. A tenant-scoped recursive CTE can resolve a chain such as `A -> B -> C` to `C` while returning the input resource when it has no outgoing merge:
+Canonical resolution remains derived rather than materialized on `resource`. `ResolveCanonicalResourceQuery` is the application read contract for this derivation. It carries exactly `tenant_id` and `resource_id`; `CanonicalResourceResolvedResult` returns exactly `requested_resource_id`, `canonical_resource_id`, `immediate_target_resource_id`, `merge_depth`, `is_canonical`, and a `canonical_resource` `ResourceReadResult`. The handler validates the requested resource with `ResourceRepository.get_by_id(...)`, follows direct tenant-scoped outgoing edges with `ResourceMergeRepository.get_outgoing_merge(...)`, then loads the terminal resource with `ResourceRepository.get_by_id(...)`. It never calls `commit()`, `get_for_update(...)`, repository `add(...)`, `list_incoming_merges(...)`, or a lock-oriented lookup.
+
+The read algorithm returns the input resource when it has no outgoing merge, resolves `A -> B` to `B`, and resolves `A -> B -> C` to `C`. For a chain, `immediate_target_resource_id` is the first direct target from the requested resource, while `canonical_resource_id` is the terminal target. Incoming branches are not consulted. All lookups use the caller's `tenant_id`, so wrong-tenant resources are indistinguishable from absent resources. The handler keeps a local visited set as a defensive cycle guard and uses `MAX_RESOURCE_MERGE_DEPTH = 64`; 64 traversed edges are allowed, and the next edge that would require traversing a 65th edge is rejected. If corrupt lineage points to a missing terminal resource, the query raises an application conflict rather than returning a partial result.
+
+The current application implementation intentionally uses repository traversal instead of a recursive SQL query. A tenant-scoped recursive CTE remains a future optimization option for resolving a chain such as `A -> B -> C` to `C` while returning the input resource when it has no outgoing merge:
 
 ```sql
 WITH RECURSIVE lineage(resource_id, path, depth) AS (
@@ -318,7 +322,7 @@ ORDER BY depth DESC
 LIMIT 1;
 ```
 
-Future service-layer work owns canonicalization workflow, merge authorization, conflict resolution, alias transfer policy, and concurrency serialization. Opposing concurrent inserts may require advisory locking or another serialization strategy later; advisory locks are intentionally not part of this database-only issue.
+Future service-layer work owns canonicalization workflow beyond read-only lookup, merge authorization, conflict resolution, alias transfer policy, path compression, materialized canonical-resource caching, fact migration, and concurrency serialization. Opposing concurrent inserts may require advisory locking or another serialization strategy later; advisory locks are intentionally not part of this database-only issue.
 
 Indexes are scoped to documented query patterns:
 

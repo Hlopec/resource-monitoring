@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from uuid import UUID
 
 from app.application.commands import (
     AssignResourceAliasCommand,
@@ -27,8 +28,10 @@ from app.application.queries import (
     GetResourceByCanonicalNameQuery,
     GetResourceByIdQuery,
     GetResourceDetailsQuery,
+    ResolveCanonicalResourceQuery,
 )
 from app.application.results import (
+    CanonicalResourceResolvedResult,
     ResourceAliasAssignedResult,
     ResourceAliasResult,
     ResourceClassificationAssignedResult,
@@ -61,6 +64,7 @@ from app.models import (
 )
 
 INITIAL_RESOURCE_RECORD_VERSION = 1
+MAX_RESOURCE_MERGE_DEPTH = 64
 
 
 class GetResourceByIdHandler:
@@ -75,11 +79,84 @@ class GetResourceByIdHandler:
             resource = uow.resources.get_by_id(query.tenant_id, query.resource_id)
             if resource is None:
                 raise EntityNotFoundError("Resource not found")
-            return ResourceReadResult(
-                id=resource.id,
-                tenant_id=resource.tenant_id,
-                canonical_name=resource.canonical_name,
-                display_name=resource.display_name,
+            return _build_resource_read_result(resource)
+
+
+class ResolveCanonicalResourceHandler:
+    """Read-only handler for resolving direct merge lineage to a canonical resource."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def handle(
+        self,
+        query: ResolveCanonicalResourceQuery,
+    ) -> CanonicalResourceResolvedResult:
+        """Follow outgoing merge edges and return the terminal resource projection."""
+        with self._uow_factory() as uow:
+            requested_resource = uow.resources.get_by_id(
+                query.tenant_id,
+                query.resource_id,
+            )
+            if requested_resource is None:
+                raise EntityNotFoundError(
+                    "Resource not found",
+                    entity_type="Resource",
+                    lookup_field="resource_id",
+                    lookup_value=query.resource_id,
+                )
+
+            current_resource_id = query.resource_id
+            immediate_target_resource_id = None
+            merge_depth = 0
+            visited: set[UUID] = set()
+
+            while True:
+                if current_resource_id in visited:
+                    raise ConflictError(
+                        "Resource merge lineage contains a cycle",
+                        entity_type="ResourceMerge",
+                        conflict_field="lineage",
+                        conflict_value=query.resource_id,
+                    )
+                visited.add(current_resource_id)
+
+                outgoing_merge = uow.resource_merges.get_outgoing_merge(
+                    query.tenant_id,
+                    current_resource_id,
+                )
+                if outgoing_merge is None:
+                    break
+                if merge_depth == MAX_RESOURCE_MERGE_DEPTH:
+                    raise ConflictError(
+                        "Resource merge lineage exceeds maximum depth",
+                        entity_type="ResourceMerge",
+                        conflict_field="merge_depth",
+                        conflict_value=MAX_RESOURCE_MERGE_DEPTH,
+                    )
+                if merge_depth == 0:
+                    immediate_target_resource_id = outgoing_merge.target_resource_id
+                current_resource_id = outgoing_merge.target_resource_id
+                merge_depth += 1
+
+            canonical_resource = uow.resources.get_by_id(
+                query.tenant_id,
+                current_resource_id,
+            )
+            if canonical_resource is None:
+                raise ConflictError(
+                    "Resource merge lineage target is missing",
+                    entity_type="ResourceMerge",
+                    conflict_field="target_resource_id",
+                    conflict_value=current_resource_id,
+                )
+            return CanonicalResourceResolvedResult(
+                requested_resource_id=query.resource_id,
+                canonical_resource_id=current_resource_id,
+                immediate_target_resource_id=immediate_target_resource_id,
+                merge_depth=merge_depth,
+                is_canonical=merge_depth == 0,
+                canonical_resource=_build_resource_read_result(canonical_resource),
             )
 
 
@@ -1212,6 +1289,15 @@ def _require_active_catalog(
             conflict_field=lookup_field,
             conflict_value=catalog_id,
         )
+
+
+def _build_resource_read_result(resource: Resource) -> ResourceReadResult:
+    return ResourceReadResult(
+        id=resource.id,
+        tenant_id=resource.tenant_id,
+        canonical_name=resource.canonical_name,
+        display_name=resource.display_name,
+    )
 
 
 def _build_resource_details_result(
