@@ -115,11 +115,11 @@ Tenant is the scope root, so `TenantRepository` does not require a separate tena
 
 Global managed catalog repositories deliberately do not accept `tenant_id`; `resource_type`, `identifier_type`, `relationship_type`, `ownership_role`, `classification_type`, `classification_value`, `lifecycle_status`, `criticality`, and `exposure_level` remain global managed catalogs. `SQLAlchemyManagedCatalogRepository` is a small typed adapter for `ResourceType`, `IdentifierType`, `RelationshipType`, `OwnershipRole`, `ClassificationType`, `LifecycleStatus`, `Criticality`, and `ExposureLevel`. `SQLAlchemyClassificationValueRepository` is specialized because value lookup is scoped by `classification_type_id`.
 
-The resource aggregate contract includes `get_for_update(...)` to reserve a place for explicit concurrent mutation workflows. It does not expose SQLAlchemy lock expressions. Identifier-based resource matching belongs to `ResourceIdentifierRepository`; canonical merge traversal belongs to later merge/query service work and is not exposed on `ResourceRepository` in this stage.
+The resource aggregate contract includes `get_for_update(...)` to reserve a place for explicit concurrent mutation workflows. It does not expose SQLAlchemy lock expressions. Identifier-based resource matching belongs to `ResourceIdentifierRepository`; canonical merge traversal is implemented as an application query that composes direct `ResourceRepository.get_by_id(...)` and `ResourceMergeRepository.get_outgoing_merge(...)` calls instead of adding a recursive lookup to `ResourceRepository`.
 
 Temporal fact repositories expose current lookup boundaries and `add(...)`; `ResourceStateRepository` also exposes state history. They do not expose `close_current(...)`, `replace_current(...)`, history deletion, or a universal temporal repository framework because replacement semantics belong in explicit application-service commands.
 
-Alias and merge contracts expose alias resolution and merge-lineage persistence only. They do not implement merge execution, canonical traversal, alias transfer, deduplication, or conflict-resolution workflows.
+Alias and merge contracts expose alias resolution and merge-lineage persistence only. They do not implement merge execution, alias transfer, deduplication, conflict-resolution workflows, path compression, or materialized canonical-resource caching.
 
 Repository contracts are exposed through the application-facing Unit of Work protocol where concrete adapters now exist. The current neutral properties are `tenants: TenantRepository`, `organizations: OrganizationRepository`, `resources: ResourceRepository`, `resource_types: ManagedCatalogRepository[ResourceType]`, `identifier_types: ManagedCatalogRepository[IdentifierType]`, `relationship_types: ManagedCatalogRepository[RelationshipType]`, `ownership_roles: ManagedCatalogRepository[OwnershipRole]`, `classification_types: ManagedCatalogRepository[ClassificationType]`, `classification_values: ClassificationValueRepository`, `lifecycle_statuses: ManagedCatalogRepository[LifecycleStatus]`, `criticalities: ManagedCatalogRepository[Criticality]`, `exposure_levels: ManagedCatalogRepository[ExposureLevel]`, `resource_identifiers: ResourceIdentifierRepository`, `resource_ownerships: ResourceOwnershipRepository`, `resource_relationships: ResourceRelationshipRepository`, `resource_classifications: ResourceClassificationRepository`, `resource_labels: ResourceLabelRepository`, `resource_states: ResourceStateRepository`, `resource_aliases: ResourceAliasRepository`, and `resource_merges: ResourceMergeRepository`; they import only application-facing protocols and models and do not expose SQLAlchemy types. Future repository properties should be added as their concrete adapters are implemented.
 
@@ -153,7 +153,7 @@ Commands are immutable, technology-neutral data contracts. They carry validated 
 - `transitioned_at: datetime`
 - `source: str | None`
 
-Queries are immutable, technology-neutral read contracts. They carry lookup input for read-only handlers and do not expose SQLAlchemy `Result`, `Query`, `Select`, sessions, transactions, pagination frameworks, or specification objects. `GetResourceByIdQuery` is the narrow reference lookup from the architecture baseline. `GetResourceDetailsQuery` reads a full tenant-scoped resource projection by resource id. `GetResourceByCanonicalNameQuery` reads the same projection through the existing resource canonical-name repository contract.
+Queries are immutable, technology-neutral read contracts. They carry lookup input for read-only handlers and do not expose SQLAlchemy `Result`, `Query`, `Select`, sessions, transactions, pagination frameworks, or specification objects. `GetResourceByIdQuery` is the narrow reference lookup from the architecture baseline. `GetResourceDetailsQuery` reads a full tenant-scoped resource projection by resource id. `GetResourceByCanonicalNameQuery` reads the same projection through the existing resource canonical-name repository contract. `ResolveCanonicalResourceQuery` resolves merge lineage for one tenant-owned resource and carries exactly `tenant_id: UUID` and `resource_id: UUID`.
 
 Command and query objects are plain frozen dataclasses. Future commands and queries should remain data-only and should be instantiated directly by future transport or orchestration code.
 
@@ -176,10 +176,11 @@ The first handlers are intentionally limited:
 - `GetResourceByIdHandler` reads `uow.resources.get_by_id(...)` and returns a typed `ResourceReadResult`.
 - `GetResourceDetailsHandler` reads `uow.resources.get_by_id(...)` and composes a fully materialized `ResourceDetailsResult`.
 - `GetResourceByCanonicalNameHandler` reads `uow.resources.get_by_canonical_name(...)` and composes the same `ResourceDetailsResult`.
+- `ResolveCanonicalResourceHandler` reads `uow.resources.get_by_id(...)`, follows direct outgoing merge edges with `uow.resource_merges.get_outgoing_merge(...)`, and returns a typed `CanonicalResourceResolvedResult`.
 - `EnsureResourceExistsHandler` checks `uow.resources.exists(...)` and commits once only when the resource exists.
 - `TransitionResourceStateHandler` locks the resource with `uow.resources.get_for_update(...)`, closes the current `ResourceState` when present, appends the replacement state, updates the `Resource` snapshot fields, materializes `ResourceStateTransitionedResult`, and commits once as the final operation.
 
-They do not create related facts, execute merges, resolve canonical lineage, expose APIs, or define broader onboarding workflows.
+They do not create related facts, expose APIs, or define broader onboarding workflows. Merge execution records immediate lineage only, and canonical resolution reads lineage only.
 
 ## UnitOfWorkFactory
 
@@ -214,6 +215,8 @@ Application results are immutable typed dataclasses. They are transport-neutral 
 
 Collection fields are tuples, never mutable lists. Result contracts do not expose ORM entities, lazy collections, sessions, dictionaries, HTTP response objects, Pydantic models, SQLAlchemy rows, or SQLAlchemy result objects. Future result contracts should follow the same policy unless a later use case explicitly documents a controlled mapped-entity return.
 
+`CanonicalResourceResolvedResult` is the canonical Resource resolution read result. It contains exactly `requested_resource_id`, `canonical_resource_id`, `immediate_target_resource_id`, `merge_depth`, `is_canonical`, and `canonical_resource`. `canonical_resource` is a `ResourceReadResult`, not a mapped entity. `immediate_target_resource_id` is the direct outgoing merge target from the requested resource when one exists. `canonical_resource_id` is the terminal resource reached after following outgoing merge edges. `merge_depth` is the number of traversed merge edges, and `is_canonical` is true only when depth is zero.
+
 ## Resource Read Query Composition
 
 Resource read handlers compose projections only through existing Unit of Work repositories. They do not invent repository methods, bypass tenant scope, or reach into SQLAlchemy. `GetResourceDetailsHandler` first performs a tenant-scoped resource lookup. If the resource is absent, it raises `EntityNotFoundError` immediately and performs no related-fact reads. If the resource is present, it reads only the supported current/detail repositories needed for `ResourceDetailsResult`:
@@ -230,7 +233,7 @@ Resource read handlers compose projections only through existing Unit of Work re
 
 Every repository call receives the explicit `tenant_id`. Wrong-tenant lookups raise the same `EntityNotFoundError` shape as absent resources so handlers do not leak resource existence across tenant boundaries. All projection fields are copied before the Unit of Work context exits, and no repository is accessed after exit.
 
-Pagination, search, filtering, resource lists, relationship graph expansion, canonical merge traversal, API serialization, and mutation workflows remain deferred.
+Pagination, search, filtering, resource lists, relationship graph expansion beyond canonical merge traversal, API serialization, and mutation workflows remain deferred.
 
 ## Resource Creation Command
 
@@ -563,6 +566,48 @@ sequenceDiagram
     Handler-->>Caller: ResourceMergedResult
 ```
 
+## Canonical Resource Resolution Query
+
+`ResolveCanonicalResourceHandler` is the read-only application query for resolving one requested resource to the terminal canonical resource implied by `resource_merge` lineage. The query fields are exactly `tenant_id` and `resource_id`. The result fields are exactly `requested_resource_id`, `canonical_resource_id`, `immediate_target_resource_id`, `merge_depth`, `is_canonical`, and `canonical_resource`.
+
+The handler opens one fresh Unit of Work, validates the requested resource with `uow.resources.get_by_id(tenant_id, resource_id)`, then follows direct outgoing edges through `uow.resource_merges.get_outgoing_merge(tenant_id, current_resource_id)`. After determining the terminal id, it loads the canonical resource with `uow.resources.get_by_id(tenant_id, canonical_resource_id)` and materializes a `ResourceReadResult`. It does not use `ResourceRepository.get_for_update(...)`, `ResourceMergeRepository.list_incoming_merges(...)`, recursive SQL, commits, repository mutation methods, path compression, lineage rewriting, resource fact migration, caching, or materialized canonical-id columns.
+
+Resolution semantics are deterministic:
+
+- `A` with no outgoing merge resolves to `A`, `immediate_target_resource_id=None`, `merge_depth=0`, and `is_canonical=True`.
+- `A -> B` resolves to `B`, `immediate_target_resource_id=B`, `merge_depth=1`, and `is_canonical=False`.
+- `A -> B -> C` resolves to `C`, `immediate_target_resource_id=B`, `merge_depth=2`, and `is_canonical=False`.
+- Incoming branches such as `A -> C` and `B -> C` are irrelevant to resolving `C`; the query follows only the requested resource's outgoing chain.
+
+Every lookup is tenant scoped. Wrong-tenant and absent requested resources raise `EntityNotFoundError("Resource not found", entity_type="Resource", lookup_field="resource_id", lookup_value=resource_id)` before merge traversal. If corrupt lineage points at a missing terminal resource despite database foreign-key expectations, the handler raises `ConflictError("Resource merge lineage target is missing", entity_type="ResourceMerge", conflict_field="target_resource_id", conflict_value=terminal_id)`.
+
+The application includes defensive traversal guards even though PostgreSQL prevents normal cycles. Each handler invocation uses a local visited-id set and raises `ConflictError("Resource merge lineage contains a cycle", entity_type="ResourceMerge", conflict_field="lineage", conflict_value=requested_resource_id)` if a cycle is encountered. The maximum traversal depth is `MAX_RESOURCE_MERGE_DEPTH = 64`: a 64-edge chain is allowed, while the next edge lookup that would require traversing a 65th edge raises `ConflictError("Resource merge lineage exceeds maximum depth", entity_type="ResourceMerge", conflict_field="merge_depth", conflict_value=64)`.
+
+Read-only flow:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Handler as ResolveCanonicalResourceHandler
+    participant Factory as UnitOfWorkFactory
+    participant UOW as UnitOfWork
+    participant ResourceRepo as ResourceRepository
+    participant MergeRepo as ResourceMergeRepository
+
+    Caller->>Handler: handle(ResolveCanonicalResourceQuery)
+    Handler->>Factory: __call__()
+    Factory-->>Handler: fresh UnitOfWork
+    Handler->>UOW: __enter__()
+    Handler->>ResourceRepo: get_by_id(tenant_id, requested_resource_id)
+    loop until no outgoing merge
+        Handler->>MergeRepo: get_outgoing_merge(tenant_id, current_resource_id)
+    end
+    Handler->>ResourceRepo: get_by_id(tenant_id, canonical_resource_id)
+    Handler->>Handler: materialize CanonicalResourceResolvedResult
+    Handler->>UOW: __exit__()
+    Handler-->>Caller: CanonicalResourceResolvedResult
+```
+
 ## Resource Classification Assignment Command
 
 `AssignResourceClassificationHandler` appends one current `ResourceClassification` fact for an existing resource. This use case is assignment only: it does not replace classifications, expire classifications, transfer classifications, demote existing primary classifications, close current rows, delete history, create catalog rows, add API schemas, or introduce a generic temporal mutation abstraction.
@@ -787,7 +832,7 @@ with SQLAlchemyUnitOfWork() as uow:
 
 Alias assignment uses the same direct alias lookup contract to reject duplicates and collisions before insert. It does not add canonical merge traversal or alias transfer behavior.
 
-Merge execution uses only direct outgoing merge lookup and incoming merge read-back. It records immediate requested lineage edges and does not add recursive canonical traversal.
+Merge execution uses only direct outgoing merge lookup and incoming merge read-back. It records immediate requested lineage edges and does not add recursive canonical traversal. Canonical Resource resolution is a separate read-only query that follows direct outgoing merge edges through the same tenant-scoped repository method and does not rewrite lineage.
 
 ## Transaction Ownership
 
@@ -897,6 +942,8 @@ Temporal fact repository tests verify protocol compatibility, injected-session u
 
 Lineage repository tests verify protocol compatibility, injected-session usage, exact alias-to-resource lookup, direct alias listing, direct outgoing and incoming merge-edge lookup, wrong-tenant misses, deterministic ordering, append-only add and explicit flush behavior, rollback-by-default, explicit commit persistence, failed transaction cleanup, multi-repository atomicity, database constraint preservation, Unit of Work lifecycle, session sharing, and concrete adapter placement under persistence.
 
+Canonical Resource resolution query tests verify the frozen query contract, immutable entity-free result, requested-resource miss behavior, unmerged self-resolution, one-hop and multi-hop chains, immediate-target versus canonical-target semantics, incoming branch behavior, tenant isolation, cycle defense, broken terminal lineage defense, the 64-edge maximum and 65th-edge rejection rule, fresh Unit of Work usage per invocation, SQLAlchemy integration, and no commit, lock, add, path-compression, lineage-rewrite, cache, or resource-fact mutation behavior.
+
 Application service architecture tests verify immutable commands, immutable queries, immutable typed results, structural `UnitOfWorkFactory` compatibility, fresh Unit of Work creation per execution, command handler commit-on-success behavior, rollback on command validation failure, query handler no-commit behavior, rollback on query misses, technology-neutral validation failures, and reference handler compatibility with the existing SQLAlchemy Unit of Work through factory injection.
 
 Resource creation command tests verify the frozen command contract, immutable entity-free result, deterministic input validation before Unit of Work creation, tenant validation, managed catalog existence and active-state validation, tenant-scoped canonical-name conflict behavior, exact add and commit ordering, no flush, failure propagation and cleanup, PostgreSQL persistence, read-back through resource query handlers, cross-tenant canonical-name behavior, same-tenant duplicate pre-check behavior, and no partial resource rows after validation failures.
@@ -919,7 +966,7 @@ The project remains synchronous because the current engine, sessions, tests, and
 
 ## Deferred Concerns
 
-Deferred work includes resource update commands; identifier replacement, expiration, removal, reassignment, and primary-demotion workflows; ownership replacement, expiration, removal, transfer, and primary-demotion workflows; relationship replacement, expiration, removal, inverse-edge handling, endpoint type-constraint policy, graph traversal, and transitive expansion workflows; classification replacement, expiration, removal, transfer, and primary-demotion workflows; alias normalization, alias re-observation/update, alias deletion, alias transfer, ResolveCanonicalResourceQuery, recursive canonical traversal, fact migration and consolidation policy, relationship rewiring, source archival, and unmerge workflows; temporal fact creation and replacement services beyond resource state, identifier assignment, ownership assignment, relationship assignment, classification assignment, and label assignment; automatic label, alias, relationship, and merge workflows; lineage services; broader lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; expanded persistence error translation mappings as new named constraints become use-case relevant; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; deterministic multi-session lock timing tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
+Deferred work includes resource update commands; identifier replacement, expiration, removal, reassignment, and primary-demotion workflows; ownership replacement, expiration, removal, transfer, and primary-demotion workflows; relationship replacement, expiration, removal, inverse-edge handling, endpoint type-constraint policy, graph traversal, and transitive expansion workflows; classification replacement, expiration, removal, transfer, and primary-demotion workflows; alias normalization, alias re-observation/update, alias deletion, alias transfer, recursive CTE optimization for canonical resolution, fact migration and consolidation policy, relationship rewiring, source archival, and unmerge workflows; temporal fact creation and replacement services beyond resource state, identifier assignment, ownership assignment, relationship assignment, classification assignment, and label assignment; automatic label, alias, relationship, and merge workflows; lineage services beyond read-only canonical resolution; broader lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; expanded persistence error translation mappings as new named constraints become use-case relevant; query services; pagination; merge execution beyond lineage recording; alias transfer policy; query-count tests; deterministic multi-session lock timing tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
 
 ## Implementation Roadmap
 
