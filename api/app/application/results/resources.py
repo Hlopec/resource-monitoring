@@ -67,6 +67,19 @@ class ResourceOwnershipAssignedResult:
 
 
 @dataclass(frozen=True)
+class ResourceClassificationAssignedResult:
+    """Result returned after a resource classification assignment is committed."""
+
+    resource_id: UUID
+    classification_id: UUID
+    classification_type_id: UUID
+    classification_value_id: UUID
+    is_primary: bool
+    valid_from: datetime
+    source: str | None
+
+
+@dataclass(frozen=True)
 class ResourceStateResult:
     """Current resource state projection."""
 

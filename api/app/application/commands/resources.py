@@ -76,3 +76,17 @@ class AssignResourceOwnershipCommand:
     confidence_score: Decimal
     valid_from: datetime
     source: str | None
+
+
+@dataclass(frozen=True)
+class AssignResourceClassificationCommand:
+    """Command to append one current classification row for a resource."""
+
+    tenant_id: UUID
+    resource_id: UUID
+    classification_type_id: UUID
+    classification_value_id: UUID
+    is_primary: bool
+    confidence_score: Decimal
+    valid_from: datetime
+    source: str | None

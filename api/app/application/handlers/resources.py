@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.application.commands import (
+    AssignResourceClassificationCommand,
     AssignResourceIdentifierCommand,
     AssignResourceOwnershipCommand,
     CreateResourceCommand,
@@ -24,6 +25,7 @@ from app.application.queries import (
     GetResourceDetailsQuery,
 )
 from app.application.results import (
+    ResourceClassificationAssignedResult,
     ResourceIdentifierAssignedResult,
     ResourceAliasResult,
     ResourceClassificationResult,
@@ -38,7 +40,13 @@ from app.application.results import (
     ResourceStateTransitionedResult,
     ResourceStateResult,
 )
-from app.models import Resource, ResourceIdentifier, ResourceOwnership, ResourceState
+from app.models import (
+    Resource,
+    ResourceClassification,
+    ResourceIdentifier,
+    ResourceOwnership,
+    ResourceState,
+)
 
 INITIAL_RESOURCE_RECORD_VERSION = 1
 
@@ -454,6 +462,112 @@ class AssignResourceOwnershipHandler:
             return result
 
 
+class AssignResourceClassificationHandler:
+    """Command handler for assigning one current classification to a resource."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def handle(
+        self,
+        command: AssignResourceClassificationCommand,
+    ) -> ResourceClassificationAssignedResult:
+        """Append one classification fact, commit once, and return a result."""
+        _validate_assign_resource_classification_command(command)
+        with self._uow_factory() as uow:
+            resource = uow.resources.get_for_update(
+                command.tenant_id,
+                command.resource_id,
+            )
+            if resource is None:
+                raise EntityNotFoundError(
+                    "Resource not found",
+                    entity_type="Resource",
+                    lookup_field="resource_id",
+                    lookup_value=command.resource_id,
+                )
+            _require_active_catalog(
+                uow.classification_types,
+                command.classification_type_id,
+                entity_type="ClassificationType",
+                lookup_field="classification_type_id",
+            )
+            classification_value = uow.classification_values.get_by_id(
+                command.classification_value_id,
+            )
+            if classification_value is None:
+                raise EntityNotFoundError(
+                    "ClassificationValue not found",
+                    entity_type="ClassificationValue",
+                    lookup_field="classification_value_id",
+                    lookup_value=command.classification_value_id,
+                )
+            if not classification_value.is_active:
+                raise ConflictError(
+                    "ClassificationValue is inactive",
+                    entity_type="ClassificationValue",
+                    conflict_field="classification_value_id",
+                    conflict_value=command.classification_value_id,
+                )
+            if classification_value.classification_type_id != command.classification_type_id:
+                raise ConflictError(
+                    "ClassificationValue does not belong to ClassificationType",
+                    entity_type="ClassificationValue",
+                    conflict_field="classification_type_id",
+                    conflict_value=command.classification_type_id,
+                )
+            current_classification = uow.resource_classifications.find_current(
+                command.tenant_id,
+                command.resource_id,
+                command.classification_type_id,
+                command.classification_value_id,
+            )
+            if current_classification is not None:
+                raise ConflictError(
+                    "Resource classification is already assigned",
+                    entity_type="ResourceClassification",
+                    conflict_field="current",
+                    conflict_value=command.classification_value_id,
+                )
+            if command.is_primary:
+                current_primary = uow.resource_classifications.get_current_primary(
+                    command.tenant_id,
+                    command.resource_id,
+                    command.classification_type_id,
+                )
+                if current_primary is not None:
+                    raise ConflictError(
+                        "Resource classification primary already exists",
+                        entity_type="ResourceClassification",
+                        conflict_field="current_primary",
+                        conflict_value=command.classification_type_id,
+                    )
+
+            classification = ResourceClassification(
+                tenant_id=command.tenant_id,
+                resource_id=command.resource_id,
+                classification_type_id=command.classification_type_id,
+                classification_value_id=command.classification_value_id,
+                is_primary=command.is_primary,
+                confidence_score=command.confidence_score,
+                valid_from=command.valid_from,
+                valid_to=None,
+                source=command.source,
+            )
+            uow.resource_classifications.add(classification)
+            result = ResourceClassificationAssignedResult(
+                resource_id=command.resource_id,
+                classification_id=classification.id,
+                classification_type_id=command.classification_type_id,
+                classification_value_id=command.classification_value_id,
+                is_primary=command.is_primary,
+                valid_from=command.valid_from,
+                source=command.source,
+            )
+            uow.commit()
+            return result
+
+
 def _validate_create_resource_command(command: CreateResourceCommand) -> None:
     failures: list[ValidationFailure] = []
     if command.canonical_name.strip() == "":
@@ -496,6 +610,31 @@ def _validate_create_resource_command(command: CreateResourceCommand) -> None:
     if failures:
         raise ValidationError(
             "Invalid resource creation command",
+            failures=tuple(failures),
+        )
+
+
+def _validate_assign_resource_classification_command(
+    command: AssignResourceClassificationCommand,
+) -> None:
+    failures: list[ValidationFailure] = []
+    if command.confidence_score < Decimal("0") or command.confidence_score > Decimal(
+        "1"
+    ):
+        failures.append(
+            ValidationFailure("confidence_score", "must be between 0 and 1")
+        )
+    valid_from_is_aware = (
+        command.valid_from.tzinfo is not None
+        and command.valid_from.utcoffset() is not None
+    )
+    if not valid_from_is_aware:
+        failures.append(ValidationFailure("valid_from", "must be timezone-aware"))
+    if command.source is not None and command.source.strip() == "":
+        failures.append(ValidationFailure("source", "must not be blank when provided"))
+    if failures:
+        raise ValidationError(
+            "Invalid resource classification assignment command",
             failures=tuple(failures),
         )
 

@@ -119,6 +119,16 @@ class ResourceClassificationRepository(Protocol):
         """Return current classifications for a resource."""
         ...
 
+    def find_current(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+        classification_type_id: UUID,
+        classification_value_id: UUID,
+    ) -> ResourceClassification | None:
+        """Return a current classification row by resource, type, and value."""
+        ...
+
     def get_current_primary(
         self,
         tenant_id: UUID,

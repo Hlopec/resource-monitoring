@@ -18,6 +18,7 @@ from app.application.errors import (
     ValidationFailure,
 )
 from app.application.handlers import (
+    AssignResourceClassificationHandler,
     AssignResourceIdentifierHandler,
     AssignResourceOwnershipHandler,
     CommandHandler,
@@ -453,6 +454,7 @@ def test_handler_protocols_define_direct_handle_contracts() -> None:
 
 def test_reference_handlers_depend_on_unit_of_work_factory_only() -> None:
     for handler_type in (
+        AssignResourceClassificationHandler,
         AssignResourceIdentifierHandler,
         AssignResourceOwnershipHandler,
         EnsureResourceExistsHandler,
@@ -509,6 +511,8 @@ def test_repository_protocols_define_expected_signatures() -> None:
         (ResourceIdentifierRepository, "get_current_primary"): ResourceIdentifier | None,
         (ResourceOwnershipRepository, "find_current"): ResourceOwnership | None,
         (ResourceOwnershipRepository, "get_current_primary"): ResourceOwnership | None,
+        (ResourceClassificationRepository, "find_current"): ResourceClassification
+        | None,
         (ResourceClassificationRepository, "get_current_primary"): ResourceClassification | None,
         (ResourceStateRepository, "get_current"): ResourceState | None,
         (ResourceAliasRepository, "find_resource_by_alias"): Resource | None,

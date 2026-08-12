@@ -232,6 +232,25 @@ class SQLAlchemyResourceClassificationRepository(
             )
         )
 
+    def find_current(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+        classification_type_id: UUID,
+        classification_value_id: UUID,
+    ) -> ResourceClassification | None:
+        return self._scalar(
+            current_temporal_statement(self, tenant_id)
+            .where(
+                ResourceClassification.resource_id == resource_id,
+                ResourceClassification.classification_type_id
+                == classification_type_id,
+                ResourceClassification.classification_value_id
+                == classification_value_id,
+            )
+            .order_by(ResourceClassification.id)
+        )
+
     def get_current_primary(
         self,
         tenant_id: UUID,
