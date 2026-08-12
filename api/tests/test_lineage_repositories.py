@@ -11,6 +11,7 @@ from sqlalchemy import Engine, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.application.errors import ConflictError
 from app.application.ports.lineage import (
     ResourceAliasRepository,
     ResourceMergeRepository,
@@ -352,7 +353,7 @@ def test_lineage_constraint_failure_rolls_back_and_next_unit_of_work_succeeds(
     alias = _alias(refs, normalized_value="atomic.example.com")
     merge = _merge(refs)
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(ConflictError):
         with SQLAlchemyUnitOfWork(SessionLocal) as uow:
             uow.resource_aliases.add(alias)
             uow.resource_merges.add(merge)

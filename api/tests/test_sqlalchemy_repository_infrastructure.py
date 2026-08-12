@@ -10,6 +10,7 @@ from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.orm.exc import StaleDataError
 
+from app.application.errors import ConcurrentModificationError
 from app.db.seed.catalogs import seed_catalogs
 from app.models import (
     Criticality,
@@ -361,6 +362,7 @@ def test_resource_optimistic_concurrency_remains_sqlalchemy_managed(
             assert first_resource.record_version == 2
 
             second_resource.display_name = "Updated by stale second session"
-            with pytest.raises(StaleDataError):
+            with pytest.raises(ConcurrentModificationError) as exc_info:
                 second.commit()
+            assert isinstance(exc_info.value.__cause__, StaleDataError)
             second.rollback()

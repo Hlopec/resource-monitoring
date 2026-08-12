@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.orm.exc import StaleDataError
 
+from app.application.errors import ConcurrentModificationError
 from app.application.ports.resources import ResourceRepository
 from app.db.seed.catalogs import seed_catalogs
 from app.models import (
@@ -427,8 +428,9 @@ def test_resource_optimistic_concurrency_uses_sqlalchemy_versioning(
             assert first_resource.record_version == 2
 
             second_resource.display_name = "Updated by stale second session"
-            with pytest.raises(StaleDataError):
+            with pytest.raises(ConcurrentModificationError) as exc_info:
                 second.commit()
+            assert isinstance(exc_info.value.__cause__, StaleDataError)
 
     with SQLAlchemyUnitOfWork(SessionLocal) as replacement:
         loaded = replacement.resources.get_by_id(tenant_id, resource_id)

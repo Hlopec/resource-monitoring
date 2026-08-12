@@ -11,6 +11,7 @@ from sqlalchemy import Engine, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.application.errors import ConflictError
 from app.application.ports.temporal import (
     ResourceClassificationRepository,
     ResourceIdentifierRepository,
@@ -701,7 +702,7 @@ def test_temporal_constraint_failure_rolls_back_multi_repository_unit_of_work(
     ownership = _ownership(refs, is_primary=True)
     state = _state(refs)
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(ConflictError):
         with SQLAlchemyUnitOfWork(SessionLocal) as uow:
             uow.resource_identifiers.add(identifier)
             uow.resource_ownerships.add(ownership)

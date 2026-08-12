@@ -127,7 +127,7 @@ Managed catalog repositories are global and non-tenant-scoped. `SQLAlchemyManage
 
 Temporal fact repositories live in `app.persistence.sqlalchemy.repositories.temporal`. They map `ResourceIdentifierRepository`, `ResourceOwnershipRepository`, `ResourceRelationshipRepository`, `ResourceClassificationRepository`, `ResourceLabelRepository`, and `ResourceStateRepository` to SQLAlchemy adapters. Current reads use the schema predicate `valid_to IS NULL` plus explicit tenant and domain predicates. `ResourceStateRepository.list_history(...)` returns current and closed state rows ordered by `valid_from, id`; other temporal contracts do not currently expose history methods.
 
-Temporal repositories are append/read only. `add(...)` attaches a new temporal fact row to the active Unit of Work session without flushing, committing, rolling back, closing previous rows, rewriting history, or deleting history. Current collection ordering is deterministic: identifiers by `identifier_type_id, namespace, normalized_value, id`; ownership by `ownership_role_id, is_primary DESC, organization_id, id`; relationships by relationship type plus opposite endpoint and id; classifications by `classification_type_id, classification_value_id, id`; labels by `label_id, id`. PostgreSQL continues to enforce current-row uniqueness, `valid_to > valid_from`, tenant-consistent resource references, relationship endpoint constraints, classification type/value consistency, label assignment consistency, and state uniqueness. Original SQLAlchemy/database exceptions propagate unchanged; persistence error translation remains deferred.
+Temporal repositories are append/read only. `add(...)` attaches a new temporal fact row to the active Unit of Work session without flushing, committing, rolling back, closing previous rows, rewriting history, or deleting history. Current collection ordering is deterministic: identifiers by `identifier_type_id, namespace, normalized_value, id`; ownership by `ownership_role_id, is_primary DESC, organization_id, id`; relationships by relationship type plus opposite endpoint and id; classifications by `classification_type_id, classification_value_id, id`; labels by `label_id, id`. PostgreSQL continues to enforce current-row uniqueness, `valid_to > valid_from`, tenant-consistent resource references, relationship endpoint constraints, classification type/value consistency, label assignment consistency, and state uniqueness. Commit-time persistence error translation maps only explicitly recognized SQLSTATE and constraint-name combinations; explicit lower-level flush failures may still propagate as raw SQLAlchemy/database errors.
 
 Lineage repositories live in `app.persistence.sqlalchemy.repositories.lineage`. `SQLAlchemyResourceAliasRepository` maps `ResourceAliasRepository` to exact tenant-scoped alias lookup and direct resource alias listing. Alias lookup uses the caller-provided string `alias_type` and precomputed `normalized_value`; it does not normalize input, search identifiers, follow merge chains, or resolve canonical resources. Alias listing returns rows for the direct resource ordered by `alias_type, normalized_value, id`.
 
@@ -137,7 +137,23 @@ Lineage repositories are append/read only. `add(...)` attaches `ResourceAlias` o
 
 Loading and locking are explicit. Repository helpers may apply concrete loader options selected for a specific operation, but there is no blanket eager loading or include/expand framework. `SELECT ... FOR UPDATE` is opt-in through `SQLAlchemyResourceRepository.get_for_update(...)` and is not applied to normal resource reads. Optimistic concurrency remains model-specific: `resource.record_version` is mapped as SQLAlchemy's `version_id_col`, and repository infrastructure preserves normal `StaleDataError` behavior without translating or manually incrementing version columns.
 
-Repository errors propagate as original SQLAlchemy or database exceptions. Duplicate tenant slugs and duplicate non-null organization external keys within one tenant raise `IntegrityError` during flush or commit. Resource missing foreign keys also raise `IntegrityError`. Persistence error translation remains deferred.
+Repositories remain transaction-neutral and do not translate errors. `SQLAlchemyUnitOfWork.commit()` owns transaction completion and translates known commit failures through `app.persistence.sqlalchemy.errors`. The boundary is:
+
+```text
+Application Handler
+    ↓
+UnitOfWork.commit()
+    ↓
+SQLAlchemy/PostgreSQL
+    ↓
+Persistence translator
+    ↓
+Technology-neutral ApplicationError
+```
+
+The translator uses stable exception type, SQLSTATE, and PostgreSQL constraint-name metadata. It does not parse human-readable database messages. Translated errors retain the original SQLAlchemy/database exception as `__cause__`. Unknown or unmapped persistence errors continue to propagate unchanged; for example, duplicate tenant slugs and missing resource foreign keys are not currently mapped to application conflicts.
+
+Mapped current-row and lineage uniqueness violations use PostgreSQL SQLSTATE `23505` plus exact constraint names. `Resource` optimistic concurrency uses SQLAlchemy `StaleDataError`, produced by the mapped `record_version` `version_id_col`, and is translated to `ConcurrentModificationError`. No automatic retry is added for deadlocks, serialization failures, optimistic conflicts, or uniqueness conflicts. Future transport code owns HTTP mapping for application errors.
 
 ## Migrations
 
