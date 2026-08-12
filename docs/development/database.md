@@ -259,6 +259,16 @@ Tenant isolation is enforced through the composite foreign key `(tenant_id, reso
 
 The database enforces non-empty `alias_type`, `alias_value`, and `normalized_value`, optional non-empty `source`, and `last_seen_at >= first_seen_at`.
 
+`AssignResourceAliasCommand` is the current application-layer assignment workflow for this table. The command carries `tenant_id`, `resource_id`, `alias_type`, `alias_value`, `normalized_value`, nullable `source`, `first_seen_at`, and `last_seen_at`.
+
+The handler validates command-only values before opening a Unit of Work: alias strings must not be blank, non-null `source` must not be blank, timestamps must be timezone-aware, and `last_seen_at` must be greater than or equal to `first_seen_at`. It then locks the tenant-scoped resource with `ResourceRepository.get_for_update(...)` before alias lookup. Wrong-tenant resources behave as not found.
+
+Alias identity is `tenant_id + alias_type + normalized_value`. `alias_value` is the original/evidence value supplied by the caller, while `normalized_value` is the upstream lookup identity. The handler does not normalize alias values, derive normalized values, trim accepted values, lowercase, parse DNS/URL/IP data, or hash aliases. Both fields are persisted exactly as supplied.
+
+Before insert, the handler uses `ResourceAliasRepository.find_resource_by_alias(...)` to reject existing alias keys. If the alias already resolves to the same resource, the command raises a duplicate conflict and does not update `last_seen_at`, `source`, or `alias_value`. If the alias resolves to another resource, the command raises a collision conflict and does not transfer the alias, create a `resource_merge`, or resolve canonical lineage. On success, the handler appends exactly one `ResourceAlias`, materializes the result before commit, does not call explicit flush, and commits once as the final meaningful operation. Concurrent uniqueness races are still enforced by `uq_resource_alias_tenant_alias_type_normalized_value` and translated by `SQLAlchemyUnitOfWork.commit()`.
+
+Alias normalization, alias re-observation/update, alias deletion, alias transfer, canonical resolution, and Resource Merge execution remain separate future workflows.
+
 Indexes are scoped to lookup and audit patterns:
 
 - `UNIQUE (tenant_id, alias_type, normalized_value)` supports exact tenant-local alias resolution.

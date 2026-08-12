@@ -480,6 +480,46 @@ sequenceDiagram
     Handler-->>Caller: ResourceRelationshipAssignedResult
 ```
 
+## Resource Alias Assignment Command
+
+`AssignResourceAliasHandler` appends one `ResourceAlias` row for an existing tenant-owned resource. This use case is assignment only: it does not normalize aliases, update existing aliases, re-observe aliases, delete aliases, transfer aliases, execute merges, resolve canonical resources, add API schemas, or introduce an alias matching framework.
+
+`AssignResourceAliasCommand` is an immutable transport-neutral dataclass with the actual fields required by the current `ResourceAlias` model: `tenant_id`, `resource_id`, `alias_type`, `alias_value`, `normalized_value`, nullable `source`, `first_seen_at`, and `last_seen_at`. The handler preserves `alias_value` and `normalized_value` exactly as supplied by the caller. `alias_value` is the original observed value; `normalized_value` is the lookup identity produced upstream. This handler does not derive normalized values, trim accepted values, lowercase, parse URLs, canonicalize DNS names, normalize IP addresses, hash aliases, or apply regex rules.
+
+Validation starts before a Unit of Work is created. The handler rejects command-only failures with `ValidationError("Invalid resource alias assignment command", failures=(...))`: `alias_type`, `alias_value`, and `normalized_value` must not be blank; nullable `source` must not be blank when present; `first_seen_at` and `last_seen_at` must be timezone-aware; and `last_seen_at` must not be earlier than `first_seen_at`.
+
+After command-only validation, the handler opens one fresh Unit of Work and locks the tenant-scoped resource through `uow.resources.get_for_update(tenant_id, resource_id)`. Missing resources and wrong-tenant resources raise `EntityNotFoundError("Resource not found", entity_type="Resource", lookup_field="resource_id", lookup_value=resource_id)`. The handler performs no alias lookup, add, or commit after a resource miss.
+
+Alias identity follows the database uniqueness key: `tenant_id + alias_type + normalized_value`. The handler checks that identity through `uow.resource_aliases.find_resource_by_alias(tenant_id, alias_type, normalized_value)`, which returns the tenant-scoped resource that currently owns the alias key. If it resolves to the command resource, the handler raises `ConflictError("Resource alias is already assigned", entity_type="ResourceAlias", conflict_field="alias", conflict_value=normalized_value)` before mutation. If it resolves to another resource, the handler raises `ConflictError("Resource alias is already assigned to another Resource", entity_type="ResourceAlias", conflict_field="alias", conflict_value=normalized_value)` before mutation. The collision path does not transfer the alias, create a `ResourceMerge`, follow merge chains, or mark either resource as canonical.
+
+On success, the handler constructs exactly one `ResourceAlias`, adds it through `uow.resource_aliases.add(...)`, materializes `ResourceAliasAssignedResult`, and calls `uow.commit()` exactly once as the final meaningful operation. It does not call `flush()` because alias ids are Python-generated and no server-generated fields are needed for the result. Existing aliases are not updated or re-observed by this command: `last_seen_at`, `source`, `alias_value`, and ownership remain unchanged on duplicate and collision failures. Commit-time persistence translation remains available for alias uniqueness races through `uq_resource_alias_tenant_alias_type_normalized_value`.
+
+Successful alias assignment flow:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Handler as AssignResourceAliasHandler
+    participant Factory as UnitOfWorkFactory
+    participant UOW as UnitOfWork
+    participant ResourceRepo as ResourceRepository
+    participant AliasRepo as ResourceAliasRepository
+
+    Caller->>Handler: handle(AssignResourceAliasCommand)
+    Handler->>Handler: validate command values
+    Handler->>Factory: __call__()
+    Factory-->>Handler: fresh UnitOfWork
+    Handler->>UOW: __enter__()
+    Handler->>ResourceRepo: get_for_update(tenant_id, resource_id)
+    Handler->>AliasRepo: find_resource_by_alias(...)
+    Handler->>Handler: construct ResourceAlias
+    Handler->>AliasRepo: add(alias)
+    Handler->>Handler: materialize ResourceAliasAssignedResult
+    Handler->>UOW: commit()
+    Handler->>UOW: __exit__()
+    Handler-->>Caller: ResourceAliasAssignedResult
+```
+
 ## Resource Classification Assignment Command
 
 `AssignResourceClassificationHandler` appends one current `ResourceClassification` fact for an existing resource. This use case is assignment only: it does not replace classifications, expire classifications, transfer classifications, demote existing primary classifications, close current rows, delete history, create catalog rows, add API schemas, or introduce a generic temporal mutation abstraction.
@@ -702,6 +742,8 @@ with SQLAlchemyUnitOfWork() as uow:
     )
 ```
 
+Alias assignment uses the same direct alias lookup contract to reject duplicates and collisions before insert. It does not add canonical merge traversal or alias transfer behavior.
+
 ## Transaction Ownership
 
 One application command or use case normally owns one Unit of Work. Application handlers obtain that Unit of Work by calling an injected `UnitOfWorkFactory`. Application services decide whether the operation succeeds. Repositories never commit and helper functions must not hide commits. External network calls should not normally run inside an open database transaction.
@@ -832,7 +874,7 @@ The project remains synchronous because the current engine, sessions, tests, and
 
 ## Deferred Concerns
 
-Deferred work includes resource update commands; identifier replacement, expiration, removal, reassignment, and primary-demotion workflows; ownership replacement, expiration, removal, transfer, and primary-demotion workflows; relationship replacement, expiration, removal, inverse-edge handling, endpoint type-constraint policy, graph traversal, and transitive expansion workflows; classification replacement, expiration, removal, transfer, and primary-demotion workflows; temporal fact creation and replacement services beyond resource state, identifier assignment, ownership assignment, relationship assignment, classification assignment, and label assignment; automatic label, alias, relationship, and merge workflows; lineage services; broader lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; expanded persistence error translation mappings as new named constraints become use-case relevant; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; deterministic multi-session lock timing tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
+Deferred work includes resource update commands; identifier replacement, expiration, removal, reassignment, and primary-demotion workflows; ownership replacement, expiration, removal, transfer, and primary-demotion workflows; relationship replacement, expiration, removal, inverse-edge handling, endpoint type-constraint policy, graph traversal, and transitive expansion workflows; classification replacement, expiration, removal, transfer, and primary-demotion workflows; alias normalization, alias re-observation/update, alias deletion, alias transfer, canonical resolution, and Resource Merge execution workflows; temporal fact creation and replacement services beyond resource state, identifier assignment, ownership assignment, relationship assignment, classification assignment, and label assignment; automatic label, alias, relationship, and merge workflows; lineage services; broader lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; expanded persistence error translation mappings as new named constraints become use-case relevant; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; deterministic multi-session lock timing tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
 
 ## Implementation Roadmap
 
