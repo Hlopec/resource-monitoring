@@ -333,6 +333,55 @@ sequenceDiagram
     Handler-->>Caller: ResourceStateTransitionedResult
 ```
 
+## Resource Identifier Assignment Command
+
+`AssignResourceIdentifierHandler` appends one current `ResourceIdentifier` fact for an existing resource. This use case is assignment only: it does not replace identifiers, expire identifiers, reassign identifiers between resources, demote existing primary identifiers, delete history, create a normalization framework, add API schemas, or introduce a generic temporal mutation abstraction.
+
+`AssignResourceIdentifierCommand` is an immutable transport-neutral dataclass with the actual fields required by the current `ResourceIdentifier` model: `tenant_id`, `resource_id`, `identifier_type_id`, `original_value`, `normalized_value`, `value_hash`, `namespace`, `is_primary`, `confidence_score`, and `valid_from`. The command carries `original_value`, `normalized_value`, and `value_hash` explicitly because no application-owned identifier normalization or hash algorithm exists yet. The handler preserves these accepted values exactly and does not trim, lowercase, canonicalize, punycode, parse, hash, or otherwise transform them.
+
+Validation starts before a Unit of Work is created. The handler rejects command-only failures with `ValidationError("Invalid resource identifier assignment command", failures=(...))`: `original_value`, `normalized_value`, and `value_hash` must not be blank; `namespace` may be `None` but must not be blank when provided; `confidence_score` must be between `0` and `1`; and `valid_from` must be timezone-aware. There is no `source`, `source_priority`, or provenance field on the current identifier model, so the command does not carry or validate those concepts.
+
+After command-only validation, the handler opens one fresh Unit of Work and locks the tenant-scoped resource through `uow.resources.get_for_update(tenant_id, resource_id)`. Missing resources and wrong-tenant resources raise `EntityNotFoundError("Resource not found", entity_type="Resource", lookup_field="resource_id", lookup_value=resource_id)`. The handler performs no `IdentifierType` lookup, identifier lookup, add, or commit after a resource miss. The resource lock is acquired before current-identifier inspection so competing identifier assignments serialize on the resource row inside PostgreSQL.
+
+The handler validates `IdentifierType` through `uow.identifier_types.get_by_id(identifier_type_id)`. Missing identifier types raise `EntityNotFoundError`; inactive identifier types raise `ConflictError`; neither path mutates identifiers. Catalog rows are not created, reactivated, or queried through SQLAlchemy directly by the handler.
+
+Current duplicate checks use `uow.resource_identifiers.find_current_by_value(tenant_id, identifier_type_id, normalized_value, namespace)`. If the exact current identifier already belongs to the same resource, the handler raises `ConflictError("Resource identifier is already assigned", entity_type="ResourceIdentifier", conflict_field="current_value", conflict_value=normalized_value)` and creates no redundant history row. If the exact current identifier belongs to a different resource in the same tenant, this assignment command does not move it, close it, or duplicate persistence constraint mapping logic; PostgreSQL's `uq_resource_identifier_current_value` constraint and the Unit of Work persistence translator enforce that collision at commit.
+
+Primary assignment uses the schema-defined scope: one current primary identifier per `tenant_id`, `resource_id`, and `identifier_type_id`. When `is_primary=True`, the handler calls `uow.resource_identifiers.get_current_primary(tenant_id, resource_id, identifier_type_id)`. An existing current primary raises `ConflictError("Resource identifier primary already exists", entity_type="ResourceIdentifier", conflict_field="current_primary", conflict_value=identifier_type_id)` before mutation. This issue deliberately does not implement primary replacement or silent demotion.
+
+On success, the handler constructs exactly one `ResourceIdentifier` with `valid_from=command.valid_from` and `valid_to=None`, adds it through `uow.resource_identifiers.add(...)`, materializes `ResourceIdentifierAssignedResult`, and calls `uow.commit()` exactly once as the final meaningful operation. It does not call `flush()` because identifier ids are Python-generated and no server-generated fields are needed for the result. After commit it does not access repositories, Unit of Work properties, entities, or lazy attributes. Failures propagate without explicit handler rollback; Unit of Work cleanup owns rollback and session closure.
+
+Successful assignment flow:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Handler as AssignResourceIdentifierHandler
+    participant Factory as UnitOfWorkFactory
+    participant UOW as UnitOfWork
+    participant ResourceRepo as ResourceRepository
+    participant IdentifierTypeRepo as IdentifierTypeRepository
+    participant IdentifierRepo as ResourceIdentifierRepository
+
+    Caller->>Handler: handle(AssignResourceIdentifierCommand)
+    Handler->>Handler: validate command values
+    Handler->>Factory: __call__()
+    Factory-->>Handler: fresh UnitOfWork
+    Handler->>UOW: __enter__()
+    Handler->>ResourceRepo: get_for_update(tenant_id, resource_id)
+    Handler->>IdentifierTypeRepo: get_by_id(identifier_type_id)
+    Handler->>IdentifierRepo: find_current_by_value(...)
+    opt is_primary
+        Handler->>IdentifierRepo: get_current_primary(...)
+    end
+    Handler->>Handler: construct ResourceIdentifier
+    Handler->>IdentifierRepo: add(identifier)
+    Handler->>Handler: materialize ResourceIdentifierAssignedResult
+    Handler->>UOW: commit()
+    Handler->>UOW: __exit__()
+    Handler-->>Caller: ResourceIdentifierAssignedResult
+```
+
 ## Application Error Policy
 
 Application code raises technology-neutral application errors:
@@ -477,7 +526,7 @@ Tenant-scoped repository infrastructure requires explicit `tenant_id` for tenant
 
 All current managed catalog models use `code` and `is_active`; none define `sort_order`. Active-list methods therefore filter on `is_active IS true` and order by `code, id`. Classification-value active lists also filter by `classification_type_id`, exclude values from other types, and use the same `code, id` ordering within the type. Seeded rows are read through these repositories by their deterministic codes and UUIDs; the adapters do not duplicate seed data, alter seed codes, or expose catalog mutation.
 
-Temporal fact repositories use `TenantScopedSQLAlchemyRepository` and the schema's current-row predicate, `valid_to IS NULL`. Current methods apply tenant scope plus their exact resource, value, role, type, or endpoint predicates and never load all history for Python-side filtering. State history uses the contract's only current history method and returns closed and current rows ordered by `valid_from, id`; other temporal contracts do not currently expose history methods. Current collection ordering is deterministic: identifiers by `identifier_type_id, namespace, normalized_value, id`; ownership by `ownership_role_id, is_primary DESC, organization_id, id`; outgoing relationships by `relationship_type_id, target_resource_id, id`; incoming relationships by `relationship_type_id, source_resource_id, id`; classifications by `classification_type_id, classification_value_id, id`; labels by `label_id, id`.
+Temporal fact repositories use `TenantScopedSQLAlchemyRepository` and the schema's current-row predicate, `valid_to IS NULL`. Current methods apply tenant scope plus their exact resource, value, role, type, or endpoint predicates and never load all history for Python-side filtering. Identifier lookup includes exact current value lookup and current primary lookup for the schema-defined `tenant_id`, `resource_id`, and `identifier_type_id` primary scope. State history uses the contract's only current history method and returns closed and current rows ordered by `valid_from, id`; other temporal contracts do not currently expose history methods. Current collection ordering is deterministic: identifiers by `identifier_type_id, namespace, normalized_value, id`; ownership by `ownership_role_id, is_primary DESC, organization_id, id`; outgoing relationships by `relationship_type_id, target_resource_id, id`; incoming relationships by `relationship_type_id, source_resource_id, id`; classifications by `classification_type_id, classification_value_id, id`; labels by `label_id, id`.
 
 Temporal adapters are append/read only. `add(...)` attaches the new fact to the active Unit of Work session and does not flush automatically. Repositories do not close prior current rows, rewrite or delete history, validate state transitions, traverse organization hierarchies, resolve relationship graphs, create labels, mutate catalogs, translate database errors, or retry failed transactions. PostgreSQL constraints remain the source of truth for one-current-row rules, temporal interval validity, tenant-consistent resource references, relationship endpoint validity, classification type/value integrity, label assignment integrity, and original `IntegrityError` propagation.
 
@@ -571,6 +620,8 @@ Resource creation command tests verify the frozen command contract, immutable en
 
 Resource state transition command tests verify the frozen command contract, immutable entity-free result, deterministic input validation before Unit of Work creation, resource lock ordering, tenant-safe misses, managed catalog existence and active-state validation, first-state creation, existing-current closure, replacement construction, resource snapshot updates, strict timestamp validation, no-op rejection, exact add and commit ordering, no flush, failure propagation, fresh Unit of Work behavior after failure, PostgreSQL persistence, read-back through resource query handlers, history preservation, wrong-tenant isolation, validation rollback, database constraint rollback, and the stable concurrency contract that the resource row is locked before current state is read.
 
+Resource identifier assignment command tests verify the frozen command contract, immutable entity-free result, deterministic input validation before Unit of Work creation, resource lock ordering, tenant-safe misses, `IdentifierType` existence and active-state validation, same-resource duplicate rejection before mutation, cross-resource collision propagation through persistence error translation, current primary conflict rejection before mutation, exact add and commit ordering, no flush, failure propagation, fresh Unit of Work behavior after failure, PostgreSQL persistence, read-back through resource query handlers, historical row preservation, and append-only semantics.
+
 Persistence error translation tests verify explicit constraint mapping, SQLSTATE and constraint-name metadata handling, `IntegrityError` to `ConflictError` translation for mapped current-row and lineage constraints, `StaleDataError` to `ConcurrentModificationError` translation for Resource optimistic concurrency, exception chaining, rollback cleanup after translated failures, fresh Unit of Work usability after failures, and raw propagation for unmapped integrity errors.
 
 Future repository implementation issues must add integration tests proving tenant isolation, transaction behavior, no repository-level commits, error translation, relationship loading behavior, and query shape for critical paths.
@@ -581,7 +632,7 @@ The project remains synchronous because the current engine, sessions, tests, and
 
 ## Deferred Concerns
 
-Deferred work includes Label SQLAlchemy repository implementations; resource update commands; temporal fact creation and replacement services beyond resource state; automatic identifier, ownership, classification, label, alias, relationship, and merge workflows; lineage services; broader lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; expanded persistence error translation mappings as new named constraints become use-case relevant; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; deterministic multi-session lock timing tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
+Deferred work includes Label SQLAlchemy repository implementations; resource update commands; identifier replacement, expiration, removal, reassignment, and primary-demotion workflows; temporal fact creation and replacement services beyond resource state and identifier assignment; automatic ownership, classification, label, alias, relationship, and merge workflows; lineage services; broader lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; expanded persistence error translation mappings as new named constraints become use-case relevant; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; deterministic multi-session lock timing tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
 
 ## Implementation Roadmap
 

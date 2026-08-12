@@ -1,6 +1,7 @@
 """Typed immutable application result contracts."""
 
 from app.application.results.resources import (
+    ResourceIdentifierAssignedResult,
     ResourceAliasResult,
     ResourceClassificationResult,
     ResourceCreatedResult,
@@ -15,6 +16,7 @@ from app.application.results.resources import (
 )
 
 __all__ = [
+    "ResourceIdentifierAssignedResult",
     "ResourceAliasResult",
     "ResourceClassificationResult",
     "ResourceCreatedResult",

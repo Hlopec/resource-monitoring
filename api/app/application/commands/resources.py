@@ -46,3 +46,19 @@ class TransitionResourceStateCommand:
     confidence_score: Decimal
     transitioned_at: datetime
     source: str | None
+
+
+@dataclass(frozen=True)
+class AssignResourceIdentifierCommand:
+    """Command to append one current identifier row for a resource."""
+
+    tenant_id: UUID
+    resource_id: UUID
+    identifier_type_id: UUID
+    original_value: str
+    normalized_value: str
+    value_hash: str
+    namespace: str | None
+    is_primary: bool
+    confidence_score: Decimal
+    valid_from: datetime

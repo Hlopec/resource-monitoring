@@ -92,6 +92,22 @@ class SQLAlchemyResourceIdentifierRepository(
             .order_by(ResourceIdentifier.id)
         )
 
+    def get_current_primary(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+        identifier_type_id: UUID,
+    ) -> ResourceIdentifier | None:
+        return self._scalar(
+            current_temporal_statement(self, tenant_id)
+            .where(
+                ResourceIdentifier.resource_id == resource_id,
+                ResourceIdentifier.identifier_type_id == identifier_type_id,
+                ResourceIdentifier.is_primary.is_(True),
+            )
+            .order_by(ResourceIdentifier.id)
+        )
+
 
 class SQLAlchemyResourceOwnershipRepository(
     TenantScopedSQLAlchemyRepository[ResourceOwnership],
