@@ -154,6 +154,15 @@ class ResourceLabelRepository(Protocol):
         """Return current label assignments for a resource."""
         ...
 
+    def find_current(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+        label_id: UUID,
+    ) -> ResourceLabel | None:
+        """Return a current label assignment by resource and label."""
+        ...
+
     def add(self, assignment: ResourceLabel) -> None:
         """Add a label assignment row to the current Unit of Work."""
         ...

@@ -20,6 +20,7 @@ from app.models import (
     ResourceType,
     Tenant,
 )
+from app.persistence.sqlalchemy.repositories import SQLAlchemyLabelRepository
 
 
 def _seed_catalogs(session: Session) -> None:
@@ -111,6 +112,32 @@ def test_resource_label_valid_same_tenant_assignment(db_session: Session) -> Non
 
     assert assignment.id is not None
     assert assignment.valid_to is None
+
+
+def test_label_repository_reads_are_tenant_scoped_active_and_ordered(
+    db_session: Session,
+) -> None:
+    _seed_catalogs(db_session)
+    tenant_a = _tenant(db_session, "tenant-a")
+    tenant_b = _tenant(db_session, "tenant-b")
+    first = _label(tenant_a, key="environment", value="Production")
+    second = _label(tenant_a, key="owner", value="Security")
+    inactive = _label(tenant_a, key="retired", value="Legacy")
+    inactive.is_active = False
+    other_tenant = _label(tenant_b, key="environment", value="Production")
+    db_session.add_all([first, second, inactive, other_tenant])
+    db_session.flush()
+    repository = SQLAlchemyLabelRepository(db_session)
+
+    assert repository.get_by_id(tenant_a.id, first.id) is first
+    assert repository.get_by_id(tenant_b.id, first.id) is None
+    assert repository.get_by_key_value(tenant_a.id, "environment", "Production") is first
+    assert repository.get_by_key_value(tenant_b.id, "environment", "Production") is (
+        other_tenant
+    )
+    assert repository.exists_by_key_value(tenant_a.id, "owner", "Security") is True
+    assert repository.exists_by_key_value(tenant_b.id, "owner", "Security") is False
+    assert repository.list_active(tenant_a.id) == [first, second]
 
 
 def test_resource_label_historical_row_with_valid_to(db_session: Session) -> None:

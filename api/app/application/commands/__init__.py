@@ -3,6 +3,7 @@
 from app.application.commands.resources import (
     AssignResourceClassificationCommand,
     AssignResourceIdentifierCommand,
+    AssignResourceLabelCommand,
     AssignResourceOwnershipCommand,
     CreateResourceCommand,
     EnsureResourceExistsCommand,
@@ -12,6 +13,7 @@ from app.application.commands.resources import (
 __all__ = [
     "AssignResourceClassificationCommand",
     "AssignResourceIdentifierCommand",
+    "AssignResourceLabelCommand",
     "AssignResourceOwnershipCommand",
     "CreateResourceCommand",
     "EnsureResourceExistsCommand",

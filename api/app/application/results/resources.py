@@ -80,6 +80,17 @@ class ResourceClassificationAssignedResult:
 
 
 @dataclass(frozen=True)
+class ResourceLabelAssignedResult:
+    """Result returned after a resource label assignment is committed."""
+
+    resource_id: UUID
+    resource_label_id: UUID
+    label_id: UUID
+    valid_from: datetime
+    source: str | None
+
+
+@dataclass(frozen=True)
 class ResourceStateResult:
     """Current resource state projection."""
 

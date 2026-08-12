@@ -20,6 +20,7 @@ from app.models import (
 )
 from app.persistence.sqlalchemy.repositories import (
     SQLAlchemyClassificationValueRepository,
+    SQLAlchemyLabelRepository,
     SQLAlchemyManagedCatalogRepository,
     SQLAlchemyOrganizationRepository,
     SQLAlchemyResourceAliasRepository,
@@ -77,6 +78,7 @@ class SQLAlchemyUnitOfWork:
         self._session: Session | None = None
         self._tenants: SQLAlchemyTenantRepository | None = None
         self._organizations: SQLAlchemyOrganizationRepository | None = None
+        self._labels: SQLAlchemyLabelRepository | None = None
         self._resources: SQLAlchemyResourceRepository | None = None
         self._resource_types: SQLAlchemyManagedCatalogRepository[ResourceType] | None = None
         self._identifier_types: (
@@ -121,6 +123,7 @@ class SQLAlchemyUnitOfWork:
         self._state = _UnitOfWorkState.ACTIVE
         self._tenants = SQLAlchemyTenantRepository(self.session)
         self._organizations = SQLAlchemyOrganizationRepository(self.session)
+        self._labels = SQLAlchemyLabelRepository(self.session)
         self._resources = SQLAlchemyResourceRepository(self.session)
         self._resource_types = SQLAlchemyManagedCatalogRepository(
             self.session,
@@ -189,6 +192,7 @@ class SQLAlchemyUnitOfWork:
                 self._session = None
                 self._tenants = None
                 self._organizations = None
+                self._labels = None
                 self._resources = None
                 self._resource_types = None
                 self._identifier_types = None
@@ -226,6 +230,14 @@ class SQLAlchemyUnitOfWork:
         if self._organizations is None:
             raise UnitOfWorkNotActiveError("Organization repository is not active")
         return self._organizations
+
+    @property
+    def labels(self) -> SQLAlchemyLabelRepository:
+        """Return the active label repository."""
+        self.session
+        if self._labels is None:
+            raise UnitOfWorkNotActiveError("Label repository is not active")
+        return self._labels
 
     @property
     def resources(self) -> SQLAlchemyResourceRepository:

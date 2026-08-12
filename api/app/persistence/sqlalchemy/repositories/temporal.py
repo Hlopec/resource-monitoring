@@ -288,6 +288,21 @@ class SQLAlchemyResourceLabelRepository(
             .order_by(ResourceLabel.label_id, ResourceLabel.id)
         )
 
+    def find_current(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+        label_id: UUID,
+    ) -> ResourceLabel | None:
+        return self._scalar(
+            current_temporal_statement(self, tenant_id)
+            .where(
+                ResourceLabel.resource_id == resource_id,
+                ResourceLabel.label_id == label_id,
+            )
+            .order_by(ResourceLabel.id)
+        )
+
 
 class SQLAlchemyResourceStateRepository(
     TenantScopedSQLAlchemyRepository[ResourceState],
