@@ -39,6 +39,21 @@ class ResourceStateTransitionedResult:
 
 
 @dataclass(frozen=True)
+class ResourceIdentifierAssignedResult:
+    """Result returned after a resource identifier assignment is committed."""
+
+    resource_id: UUID
+    identifier_id: UUID
+    identifier_type_id: UUID
+    original_value: str
+    normalized_value: str
+    value_hash: str
+    namespace: str | None
+    is_primary: bool
+    valid_from: datetime
+
+
+@dataclass(frozen=True)
 class ResourceStateResult:
     """Current resource state projection."""
 

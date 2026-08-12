@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.application.commands import (
+    AssignResourceIdentifierCommand,
     CreateResourceCommand,
     EnsureResourceExistsCommand,
     TransitionResourceStateCommand,
@@ -22,6 +23,7 @@ from app.application.queries import (
     GetResourceDetailsQuery,
 )
 from app.application.results import (
+    ResourceIdentifierAssignedResult,
     ResourceAliasResult,
     ResourceClassificationResult,
     ResourceCreatedResult,
@@ -34,7 +36,7 @@ from app.application.results import (
     ResourceStateTransitionedResult,
     ResourceStateResult,
 )
-from app.models import Resource, ResourceState
+from app.models import Resource, ResourceIdentifier, ResourceState
 
 INITIAL_RESOURCE_RECORD_VERSION = 1
 
@@ -276,6 +278,87 @@ class TransitionResourceStateHandler:
             return result
 
 
+class AssignResourceIdentifierHandler:
+    """Command handler for assigning one current identifier to a resource."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def handle(
+        self,
+        command: AssignResourceIdentifierCommand,
+    ) -> ResourceIdentifierAssignedResult:
+        """Append one identifier fact, commit once, and return a materialized result."""
+        _validate_assign_resource_identifier_command(command)
+        with self._uow_factory() as uow:
+            resource = uow.resources.get_for_update(
+                command.tenant_id,
+                command.resource_id,
+            )
+            if resource is None:
+                raise EntityNotFoundError(
+                    "Resource not found",
+                    entity_type="Resource",
+                    lookup_field="resource_id",
+                    lookup_value=command.resource_id,
+                )
+            _require_active_catalog(
+                uow.identifier_types,
+                command.identifier_type_id,
+                entity_type="IdentifierType",
+                lookup_field="identifier_type_id",
+            )
+            current_identifier = uow.resource_identifiers.find_current_by_value(
+                command.tenant_id,
+                command.identifier_type_id,
+                command.normalized_value,
+                command.namespace,
+            )
+            if current_identifier is not None:
+                _validate_current_identifier_assignment(command, current_identifier)
+            if command.is_primary:
+                current_primary = uow.resource_identifiers.get_current_primary(
+                    command.tenant_id,
+                    command.resource_id,
+                    command.identifier_type_id,
+                )
+                if current_primary is not None:
+                    raise ConflictError(
+                        "Resource identifier primary already exists",
+                        entity_type="ResourceIdentifier",
+                        conflict_field="current_primary",
+                        conflict_value=command.identifier_type_id,
+                    )
+
+            identifier = ResourceIdentifier(
+                tenant_id=command.tenant_id,
+                resource_id=command.resource_id,
+                identifier_type_id=command.identifier_type_id,
+                namespace=command.namespace,
+                normalized_value=command.normalized_value,
+                original_value=command.original_value,
+                value_hash=command.value_hash,
+                is_primary=command.is_primary,
+                valid_from=command.valid_from,
+                valid_to=None,
+                confidence_score=command.confidence_score,
+            )
+            uow.resource_identifiers.add(identifier)
+            result = ResourceIdentifierAssignedResult(
+                resource_id=command.resource_id,
+                identifier_id=identifier.id,
+                identifier_type_id=command.identifier_type_id,
+                original_value=command.original_value,
+                normalized_value=command.normalized_value,
+                value_hash=command.value_hash,
+                namespace=command.namespace,
+                is_primary=command.is_primary,
+                valid_from=command.valid_from,
+            )
+            uow.commit()
+            return result
+
+
 def _validate_create_resource_command(command: CreateResourceCommand) -> None:
     failures: list[ValidationFailure] = []
     if command.canonical_name.strip() == "":
@@ -322,6 +405,37 @@ def _validate_create_resource_command(command: CreateResourceCommand) -> None:
         )
 
 
+def _validate_assign_resource_identifier_command(
+    command: AssignResourceIdentifierCommand,
+) -> None:
+    failures: list[ValidationFailure] = []
+    if command.original_value.strip() == "":
+        failures.append(ValidationFailure("original_value", "must not be blank"))
+    if command.normalized_value.strip() == "":
+        failures.append(ValidationFailure("normalized_value", "must not be blank"))
+    if command.value_hash.strip() == "":
+        failures.append(ValidationFailure("value_hash", "must not be blank"))
+    if command.namespace is not None and command.namespace.strip() == "":
+        failures.append(ValidationFailure("namespace", "must not be blank when provided"))
+    if command.confidence_score < Decimal("0") or command.confidence_score > Decimal(
+        "1"
+    ):
+        failures.append(
+            ValidationFailure("confidence_score", "must be between 0 and 1")
+        )
+    valid_from_is_aware = (
+        command.valid_from.tzinfo is not None
+        and command.valid_from.utcoffset() is not None
+    )
+    if not valid_from_is_aware:
+        failures.append(ValidationFailure("valid_from", "must be timezone-aware"))
+    if failures:
+        raise ValidationError(
+            "Invalid resource identifier assignment command",
+            failures=tuple(failures),
+        )
+
+
 def _validate_transition_resource_state_command(
     command: TransitionResourceStateCommand,
 ) -> None:
@@ -348,6 +462,19 @@ def _validate_transition_resource_state_command(
         raise ValidationError(
             "Invalid resource state transition command",
             failures=tuple(failures),
+        )
+
+
+def _validate_current_identifier_assignment(
+    command: AssignResourceIdentifierCommand,
+    current_identifier: ResourceIdentifier,
+) -> None:
+    if current_identifier.resource_id == command.resource_id:
+        raise ConflictError(
+            "Resource identifier is already assigned",
+            entity_type="ResourceIdentifier",
+            conflict_field="current_value",
+            conflict_value=command.normalized_value,
         )
 
 

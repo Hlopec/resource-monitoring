@@ -35,6 +35,15 @@ class ResourceIdentifierRepository(Protocol):
         """Return a current identifier by tenant/type/namespace/value."""
         ...
 
+    def get_current_primary(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+        identifier_type_id: UUID,
+    ) -> ResourceIdentifier | None:
+        """Return the current primary identifier for a resource and type."""
+        ...
+
     def add(self, identifier: ResourceIdentifier) -> None:
         """Add an identifier row to the current Unit of Work."""
         ...

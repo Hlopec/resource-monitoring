@@ -453,7 +453,7 @@ def test_temporal_repositories_satisfy_protocols_and_use_injected_session(
         assert {"commit", "rollback", "delete"}.isdisjoint(_method_names(repository))
 
 
-def test_identifier_current_reads_are_tenant_scoped_and_ordered(
+def test_identifier_current_reads_are_tenant_scoped_ordered_and_primary_aware(
     db_session: Session,
 ) -> None:
     refs = _seed_refs(db_session)
@@ -462,9 +462,15 @@ def test_identifier_current_reads_are_tenant_scoped_and_ordered(
         value="old.example.com",
         valid_from=_now(-120),
         valid_to=_now(-90),
+        is_primary=True,
     )
     first = _identifier(refs, value="b.example.com", valid_from=_now(-30))
-    second = _identifier(refs, value="a.example.com", valid_from=_now(-20))
+    second = _identifier(
+        refs,
+        value="a.example.com",
+        valid_from=_now(-20),
+        is_primary=True,
+    )
     other_resource = _identifier(refs, value="other.example.com")
     other_resource.resource_id = refs.other_resource_id
     db_session.add_all([historical, first, second, other_resource])
@@ -497,6 +503,38 @@ def test_identifier_current_reads_are_tenant_scoped_and_ordered(
             refs.tenant_id,
             uuid4(),
             "a.example.com",
+        )
+        is None
+    )
+    assert (
+        repository.get_current_primary(
+            refs.tenant_id,
+            refs.resource_id,
+            refs.identifier_type_id,
+        )
+        is second
+    )
+    assert (
+        repository.get_current_primary(
+            refs.other_tenant_id,
+            refs.resource_id,
+            refs.identifier_type_id,
+        )
+        is None
+    )
+    assert (
+        repository.get_current_primary(
+            refs.tenant_id,
+            refs.other_resource_id,
+            refs.identifier_type_id,
+        )
+        is None
+    )
+    assert (
+        repository.get_current_primary(
+            refs.tenant_id,
+            refs.resource_id,
+            uuid4(),
         )
         is None
     )
