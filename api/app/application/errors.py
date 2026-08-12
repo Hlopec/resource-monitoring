@@ -44,11 +44,13 @@ class ConflictError(ApplicationError):
         entity_type: str | None = None,
         conflict_field: str | None = None,
         conflict_value: object | None = None,
+        constraint: str | None = None,
     ) -> None:
         super().__init__(message)
         self.entity_type = entity_type
         self.conflict_field = conflict_field
         self.conflict_value = conflict_value
+        self.constraint = constraint
 
 
 class ValidationError(ApplicationError):

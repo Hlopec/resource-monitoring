@@ -96,6 +96,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APPLICATION_ROOT = ROOT / "app" / "application"
 PORTS_ROOT = APPLICATION_ROOT / "ports"
 SQLALCHEMY_PERSISTENCE_ROOT = ROOT / "app" / "persistence" / "sqlalchemy"
+SQLALCHEMY_TRANSLATOR_PATH = SQLALCHEMY_PERSISTENCE_ROOT / "errors.py"
 
 SQLALCHEMY_IMPORT_ROOTS = {"sqlalchemy"}
 FORBIDDEN_APPLICATION_IMPORT_ROOTS = {"fastapi", "pydantic", "sqlalchemy"}
@@ -207,6 +208,11 @@ def _public_methods(protocol: type) -> list[tuple[str, object]]:
     ]
 
 
+def _function_names_for(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+
+
 def _contains_optional_none(annotation: object) -> bool:
     return type(None) in get_args(annotation)
 
@@ -249,6 +255,31 @@ def test_sqlalchemy_persistence_does_not_import_api_or_schema_frameworks() -> No
         ), path
 
 
+def test_persistence_error_translator_stays_in_sqlalchemy_boundary() -> None:
+    assert SQLALCHEMY_TRANSLATOR_PATH.exists()
+    imports = _imports_for(SQLALCHEMY_TRANSLATOR_PATH)
+
+    assert SQLALCHEMY_TRANSLATOR_PATH.parent == SQLALCHEMY_PERSISTENCE_ROOT
+    assert "sqlalchemy.exc" in imports
+    assert "sqlalchemy.orm.exc" in imports
+    assert not any(imported.startswith("app.application.handlers") for imported in imports)
+    assert not any(
+        imported.split(".", 1)[0] in FORBIDDEN_PERSISTENCE_IMPORT_ROOTS
+        for imported in imports
+    )
+
+
+def test_sqlalchemy_persistence_does_not_introduce_retry_framework() -> None:
+    retry_import_roots = {"retry", "tenacity", "backoff"}
+    retry_function_names = {"retry", "retry_on_exception", "with_retry"}
+    for path in _python_files(SQLALCHEMY_PERSISTENCE_ROOT):
+        imports = _imports_for(path)
+        assert retry_import_roots.isdisjoint(
+            imported.split(".", 1)[0].lower() for imported in imports
+        ), path
+        assert retry_function_names.isdisjoint(_function_names_for(path)), path
+
+
 def test_ports_do_not_import_concrete_persistence_implementations() -> None:
     for path in _python_files(PORTS_ROOT):
         imports = _imports_for(path)
@@ -287,6 +318,16 @@ def test_application_error_hierarchy_is_explicit() -> None:
     failure = ValidationFailure("field", "message")
     error = ValidationError("Invalid input", failures=(failure,))
     assert error.failures == (failure,)
+    conflict = ConflictError(
+        "Conflict",
+        entity_type="ResourceState",
+        conflict_field="current",
+        conflict_value=None,
+        constraint="uq_resource_state_current",
+    )
+    assert conflict.constraint == "uq_resource_state_current"
+    assert not hasattr(conflict, "sql")
+    assert not hasattr(conflict, "driver_error")
 
 
 def test_unit_of_work_protocol_declares_lifecycle_methods() -> None:

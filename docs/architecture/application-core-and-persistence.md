@@ -247,7 +247,7 @@ Validation is deterministic and starts before a Unit of Work is created. The han
 
 After command-only validation, the handler opens one fresh Unit of Work through `UnitOfWorkFactory`. It validates tenant existence through `uow.tenants.get_by_id(...)`. It validates required managed catalogs through `uow.resource_types`, `uow.lifecycle_statuses`, `uow.criticalities`, and `uow.exposure_levels` using existing `get_by_id(...)` contracts. Missing references raise `EntityNotFoundError` with `entity_type`, `lookup_field`, and `lookup_value`. Inactive managed catalog references raise `ConflictError` with `entity_type`, `conflict_field`, and `conflict_value`; catalog rows are never created or reactivated by this use case.
 
-The canonical-name conflict guard is tenant-scoped and uses `uow.resources.get_by_canonical_name(command.tenant_id, command.canonical_name)`. It does not trim, lowercase, normalize, or globally search canonical names. Existing same-tenant matches raise `ConflictError`. The same canonical name in another tenant does not trigger the application pre-check. PostgreSQL constraints and foreign keys remain the concurrency-safe source of truth for races after application validation; full database exception translation remains deferred.
+The canonical-name conflict guard is tenant-scoped and uses `uow.resources.get_by_canonical_name(command.tenant_id, command.canonical_name)`. It does not trim, lowercase, normalize, or globally search canonical names. Existing same-tenant matches raise `ConflictError`. The same canonical name in another tenant does not trigger the application pre-check. PostgreSQL constraints and foreign keys remain the concurrency-safe source of truth for races after application validation.
 
 The handler constructs the current mapped `Resource` entity explicitly, following the project policy that mapped entities may initially serve as application entity representations. It sets only command-supported fields, does not manually set the generated UUID, does not construct related facts, and does not call SQLAlchemy APIs. No application-facing repository flush is added: the resource id is available at construction time, and `ResourceCreatedResult` only includes fields that are safely known before commit.
 
@@ -345,7 +345,7 @@ Application code raises technology-neutral application errors:
 - `TenantBoundaryError`
 - `PersistenceError`
 
-`ValidationError` may carry immutable `ValidationFailure` details. Application errors do not carry HTTP status codes, FastAPI exceptions, Pydantic validation objects, SQLAlchemy exceptions, driver exceptions, or storage-specific constraint details. Database exception translation remains deferred to the persistence error translation stage.
+`ValidationError` may carry immutable `ValidationFailure` details. `ConflictError` may carry technology-neutral conflict metadata including `entity_type`, `conflict_field`, `conflict_value`, and a stable `constraint` name when a persistence adapter recognizes a named database invariant. Application errors do not carry HTTP status codes, FastAPI exceptions, Pydantic validation objects, SQLAlchemy exceptions, driver exceptions, SQL text, database URLs, credentials, or raw driver objects.
 
 ## Handler Transaction Flow
 
@@ -507,7 +507,27 @@ Application code raises application-facing errors:
 - `TenantBoundaryError`
 - `PersistenceError`
 
-Future SQLAlchemy persistence implementations translate storage failures at the boundary. Translation should rely on stable information such as SQLSTATE, PostgreSQL constraint names, driver exception types, and SQLAlchemy optimistic concurrency exception types. Application code must not parse human-readable PostgreSQL error messages. The current Unit of Work deliberately preserves original SQLAlchemy/database exceptions; the translation matrix remains deferred.
+The persistence error boundary is:
+
+```text
+Application Handler
+    ↓
+UnitOfWork.commit()
+    ↓
+SQLAlchemy/PostgreSQL
+    ↓
+Persistence translator
+    ↓
+Technology-neutral ApplicationError
+```
+
+`app.persistence.sqlalchemy.errors` translates known SQLAlchemy and PostgreSQL commit failures into existing technology-neutral application errors. The translator lives entirely inside the SQLAlchemy persistence adapter; application handlers and application ports do not import it. Repositories remain transaction-neutral and do not translate errors, commit, roll back, retry, or query the database to reconstruct conflict metadata.
+
+Translation uses stable metadata only: SQLAlchemy exception type, PostgreSQL SQLSTATE, and PostgreSQL constraint name. It never parses human-readable PostgreSQL error messages, localized driver text, SQL text, or DBAPI string representations. Mapped unique-constraint violations with SQLSTATE `23505` become `ConflictError` only when their exact named constraint is present in the explicit mapping. Unknown or unmapped persistence errors continue to propagate as their original SQLAlchemy/database exceptions.
+
+Translated errors preserve the original persistence exception through exception chaining: `raise translated from exc`. `StaleDataError` from SQLAlchemy optimistic version checks maps to `ConcurrentModificationError("Resource was modified concurrently", entity_type="Resource", conflict_field="record_version")` and preserves the original `StaleDataError` as `__cause__`.
+
+No retry behavior is introduced for deadlocks, serialization failures, optimistic conflicts, or uniqueness conflicts. Future transport code may map application errors to HTTP responses, but HTTP status mapping remains outside the persistence boundary.
 
 ## Relationship-Loading Rules
 
@@ -517,7 +537,7 @@ Critical query paths should later include query-count or SQL-shape tests. `SELEC
 
 The shared loading helper only applies explicit SQLAlchemy loader options chosen by a concrete repository. It does not implement blanket eager loading, an include/expand framework, or global relationship-loading mutation. The locking helper only wraps a prepared statement with `with_for_update()` when a concrete repository asks for pessimistic locking; normal reads are not locked automatically, and no advisory locks, retry loops, deadlock handling, or lock timeout policy are introduced here.
 
-`Resource` is currently the only mapped entity with SQLAlchemy optimistic concurrency enabled through `record_version` and `version_id_col`. Shared repository infrastructure preserves SQLAlchemy's normal version-check behavior and does not catch `StaleDataError`, translate it, disable version checks, or define a generic version-column convention for all models. Broader persistence error translation remains deferred.
+`Resource` is currently the only mapped entity with SQLAlchemy optimistic concurrency enabled through `record_version` and `version_id_col`. Shared repository infrastructure preserves SQLAlchemy's normal version-check behavior and does not disable version checks or define a generic version-column convention for all models. `SQLAlchemyUnitOfWork.commit()` translates `StaleDataError` raised by this version check into `ConcurrentModificationError`.
 
 ## Write/Read Separation
 
@@ -551,6 +571,8 @@ Resource creation command tests verify the frozen command contract, immutable en
 
 Resource state transition command tests verify the frozen command contract, immutable entity-free result, deterministic input validation before Unit of Work creation, resource lock ordering, tenant-safe misses, managed catalog existence and active-state validation, first-state creation, existing-current closure, replacement construction, resource snapshot updates, strict timestamp validation, no-op rejection, exact add and commit ordering, no flush, failure propagation, fresh Unit of Work behavior after failure, PostgreSQL persistence, read-back through resource query handlers, history preservation, wrong-tenant isolation, validation rollback, database constraint rollback, and the stable concurrency contract that the resource row is locked before current state is read.
 
+Persistence error translation tests verify explicit constraint mapping, SQLSTATE and constraint-name metadata handling, `IntegrityError` to `ConflictError` translation for mapped current-row and lineage constraints, `StaleDataError` to `ConcurrentModificationError` translation for Resource optimistic concurrency, exception chaining, rollback cleanup after translated failures, fresh Unit of Work usability after failures, and raw propagation for unmapped integrity errors.
+
 Future repository implementation issues must add integration tests proving tenant isolation, transaction behavior, no repository-level commits, error translation, relationship loading behavior, and query shape for critical paths.
 
 ## Accepted Trade-Offs
@@ -559,7 +581,7 @@ The project remains synchronous because the current engine, sessions, tests, and
 
 ## Deferred Concerns
 
-Deferred work includes Label SQLAlchemy repository implementations; resource update commands; temporal fact creation and replacement services beyond resource state; automatic identifier, ownership, classification, label, alias, relationship, and merge workflows; lineage services; broader lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; persistence error translation matrix; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; deterministic multi-session lock timing tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
+Deferred work includes Label SQLAlchemy repository implementations; resource update commands; temporal fact creation and replacement services beyond resource state; automatic identifier, ownership, classification, label, alias, relationship, and merge workflows; lineage services; broader lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; expanded persistence error translation mappings as new named constraints become use-case relevant; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; deterministic multi-session lock timing tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
 
 ## Implementation Roadmap
 

@@ -33,6 +33,7 @@ from app.persistence.sqlalchemy.repositories import (
     SQLAlchemyResourceStateRepository,
     SQLAlchemyTenantRepository,
 )
+from app.persistence.sqlalchemy.errors import translate_sqlalchemy_error
 
 SessionFactory = Callable[[], Session]
 
@@ -405,9 +406,12 @@ class SQLAlchemyUnitOfWork:
 
         try:
             session.commit()
-        except Exception:
+        except Exception as exc:
             self._state = _UnitOfWorkState.FAILED
-            raise
+            translated = translate_sqlalchemy_error(exc)
+            if translated is exc:
+                raise
+            raise translated from exc
 
         self._state = _UnitOfWorkState.COMMITTED
 

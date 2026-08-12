@@ -910,7 +910,7 @@ def test_sqlalchemy_constraint_failure_rolls_back_partial_transition(
             _seed_resource(setup_session)
         )
         setup_session.commit()
-    with pytest.raises(IntegrityError):
+    with pytest.raises(ConflictError):
         with SQLAlchemyUnitOfWork(SessionLocal) as uow:
             resource = uow.resources.get_for_update(tenant_id, resource_id)
             assert resource is not None
