@@ -90,3 +90,14 @@ class AssignResourceClassificationCommand:
     confidence_score: Decimal
     valid_from: datetime
     source: str | None
+
+
+@dataclass(frozen=True)
+class AssignResourceLabelCommand:
+    """Command to append one current label assignment row for a resource."""
+
+    tenant_id: UUID
+    resource_id: UUID
+    label_id: UUID
+    valid_from: datetime
+    source: str | None

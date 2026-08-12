@@ -20,6 +20,7 @@ from app.persistence.sqlalchemy.repositories.lineage import (
     SQLAlchemyResourceAliasRepository,
     SQLAlchemyResourceMergeRepository,
 )
+from app.persistence.sqlalchemy.repositories.labels import SQLAlchemyLabelRepository
 from app.persistence.sqlalchemy.repositories.organizations import (
     SQLAlchemyOrganizationRepository,
 )
@@ -41,6 +42,7 @@ from app.persistence.sqlalchemy.repositories.temporal import (
 __all__ = [
     "RepositoryT",
     "SQLAlchemyClassificationValueRepository",
+    "SQLAlchemyLabelRepository",
     "SQLAlchemyManagedCatalogRepository",
     "SQLAlchemyOrganizationRepository",
     "SQLAlchemyResourceAliasRepository",

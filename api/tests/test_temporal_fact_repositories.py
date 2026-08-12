@@ -739,6 +739,16 @@ def test_label_current_reads_are_tenant_scoped_and_ordered(
         second,
     ]
     assert repository.get_current_for_resource(refs.other_tenant_id, refs.resource_id) == []
+    assert repository.find_current(refs.tenant_id, refs.resource_id, refs.label_id) is first
+    assert (
+        repository.find_current(refs.other_tenant_id, refs.resource_id, refs.label_id)
+        is None
+    )
+    assert (
+        repository.find_current(refs.tenant_id, refs.other_resource_id, refs.label_id)
+        is None
+    )
+    assert repository.find_current(refs.tenant_id, refs.resource_id, uuid4()) is None
 
 
 def test_state_current_and_history_reads_are_tenant_scoped_and_ordered(

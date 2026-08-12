@@ -7,6 +7,7 @@ from decimal import Decimal
 from app.application.commands import (
     AssignResourceClassificationCommand,
     AssignResourceIdentifierCommand,
+    AssignResourceLabelCommand,
     AssignResourceOwnershipCommand,
     CreateResourceCommand,
     EnsureResourceExistsCommand,
@@ -32,6 +33,7 @@ from app.application.results import (
     ResourceCreatedResult,
     ResourceDetailsResult,
     ResourceIdentifierResult,
+    ResourceLabelAssignedResult,
     ResourceLabelResult,
     ResourceMergeResult,
     ResourceOwnershipAssignedResult,
@@ -44,6 +46,7 @@ from app.models import (
     Resource,
     ResourceClassification,
     ResourceIdentifier,
+    ResourceLabel,
     ResourceOwnership,
     ResourceState,
 )
@@ -568,6 +571,78 @@ class AssignResourceClassificationHandler:
             return result
 
 
+class AssignResourceLabelHandler:
+    """Command handler for assigning one current label to a resource."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def handle(
+        self,
+        command: AssignResourceLabelCommand,
+    ) -> ResourceLabelAssignedResult:
+        """Append one label assignment fact, commit once, and return a result."""
+        _validate_assign_resource_label_command(command)
+        with self._uow_factory() as uow:
+            resource = uow.resources.get_for_update(
+                command.tenant_id,
+                command.resource_id,
+            )
+            if resource is None:
+                raise EntityNotFoundError(
+                    "Resource not found",
+                    entity_type="Resource",
+                    lookup_field="resource_id",
+                    lookup_value=command.resource_id,
+                )
+            label = uow.labels.get_by_id(command.tenant_id, command.label_id)
+            if label is None:
+                raise EntityNotFoundError(
+                    "Label not found",
+                    entity_type="Label",
+                    lookup_field="label_id",
+                    lookup_value=command.label_id,
+                )
+            if not label.is_active:
+                raise ConflictError(
+                    "Label is inactive",
+                    entity_type="Label",
+                    conflict_field="label_id",
+                    conflict_value=command.label_id,
+                )
+            current_label = uow.resource_labels.find_current(
+                command.tenant_id,
+                command.resource_id,
+                command.label_id,
+            )
+            if current_label is not None:
+                raise ConflictError(
+                    "Resource label is already assigned",
+                    entity_type="ResourceLabel",
+                    conflict_field="current",
+                    conflict_value=command.label_id,
+                )
+
+            resource_label = ResourceLabel(
+                tenant_id=command.tenant_id,
+                resource_id=command.resource_id,
+                label_id=command.label_id,
+                valid_from=command.valid_from,
+                valid_to=None,
+                source=command.source,
+            )
+            uow.resource_labels.add(resource_label)
+            result = ResourceLabelAssignedResult(
+                resource_id=command.resource_id,
+                resource_label_id=resource_label.id,
+                label_id=command.label_id,
+                valid_from=command.valid_from,
+                source=command.source,
+            )
+            uow.commit()
+            return result
+
+
 def _validate_create_resource_command(command: CreateResourceCommand) -> None:
     failures: list[ValidationFailure] = []
     if command.canonical_name.strip() == "":
@@ -610,6 +685,25 @@ def _validate_create_resource_command(command: CreateResourceCommand) -> None:
     if failures:
         raise ValidationError(
             "Invalid resource creation command",
+            failures=tuple(failures),
+        )
+
+
+def _validate_assign_resource_label_command(
+    command: AssignResourceLabelCommand,
+) -> None:
+    failures: list[ValidationFailure] = []
+    valid_from_is_aware = (
+        command.valid_from.tzinfo is not None
+        and command.valid_from.utcoffset() is not None
+    )
+    if not valid_from_is_aware:
+        failures.append(ValidationFailure("valid_from", "must be timezone-aware"))
+    if command.source is not None and command.source.strip() == "":
+        failures.append(ValidationFailure("source", "must not be blank when provided"))
+    if failures:
+        raise ValidationError(
+            "Invalid resource label assignment command",
             failures=tuple(failures),
         )
 

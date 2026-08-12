@@ -20,6 +20,7 @@ from app.application.errors import (
 from app.application.handlers import (
     AssignResourceClassificationHandler,
     AssignResourceIdentifierHandler,
+    AssignResourceLabelHandler,
     AssignResourceOwnershipHandler,
     CommandHandler,
     CreateResourceHandler,
@@ -81,6 +82,7 @@ from app.models import (
 )
 from app.persistence.sqlalchemy.repositories import (
     SQLAlchemyClassificationValueRepository,
+    SQLAlchemyLabelRepository,
     SQLAlchemyManagedCatalogRepository,
     SQLAlchemyOrganizationRepository,
     SQLAlchemyResourceAliasRepository,
@@ -141,6 +143,7 @@ FORBIDDEN_READ_ONLY_CATALOG_METHODS = FORBIDDEN_REPOSITORY_METHODS | {
 CONCRETE_REPOSITORIES = (
     SQLAlchemyTenantRepository,
     SQLAlchemyOrganizationRepository,
+    SQLAlchemyLabelRepository,
     SQLAlchemyResourceRepository,
     SQLAlchemyManagedCatalogRepository,
     SQLAlchemyClassificationValueRepository,
@@ -343,6 +346,7 @@ def test_unit_of_work_protocol_exposes_technology_neutral_repositories() -> None
 
     assert hints["tenants"] is TenantRepository
     assert hints["organizations"] is OrganizationRepository
+    assert hints["labels"] is LabelRepository
     assert hints["resources"] is ResourceRepository
     assert hints["resource_types"] == ManagedCatalogRepository[ResourceType]
     assert hints["identifier_types"] == ManagedCatalogRepository[IdentifierType]
@@ -456,6 +460,7 @@ def test_reference_handlers_depend_on_unit_of_work_factory_only() -> None:
     for handler_type in (
         AssignResourceClassificationHandler,
         AssignResourceIdentifierHandler,
+        AssignResourceLabelHandler,
         AssignResourceOwnershipHandler,
         EnsureResourceExistsHandler,
         CreateResourceHandler,
@@ -514,6 +519,7 @@ def test_repository_protocols_define_expected_signatures() -> None:
         (ResourceClassificationRepository, "find_current"): ResourceClassification
         | None,
         (ResourceClassificationRepository, "get_current_primary"): ResourceClassification | None,
+        (ResourceLabelRepository, "find_current"): ResourceLabel | None,
         (ResourceStateRepository, "get_current"): ResourceState | None,
         (ResourceAliasRepository, "find_resource_by_alias"): Resource | None,
         (ResourceMergeRepository, "get_outgoing_merge"): ResourceMerge | None,

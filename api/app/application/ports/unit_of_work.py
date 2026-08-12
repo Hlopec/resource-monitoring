@@ -11,6 +11,7 @@ from app.application.ports.lineage import (
     ResourceAliasRepository,
     ResourceMergeRepository,
 )
+from app.application.ports.labels import LabelRepository
 from app.application.ports.organizations import OrganizationRepository
 from app.application.ports.resources import ResourceRepository
 from app.application.ports.tenants import TenantRepository
@@ -46,6 +47,7 @@ class UnitOfWork(Protocol):
 
     tenants: TenantRepository
     organizations: OrganizationRepository
+    labels: LabelRepository
     resources: ResourceRepository
     resource_types: ManagedCatalogRepository[ResourceType]
     identifier_types: ManagedCatalogRepository[IdentifierType]

@@ -489,6 +489,50 @@ sequenceDiagram
     Handler-->>Caller: ResourceClassificationAssignedResult
 ```
 
+## Resource Label Assignment Command
+
+`AssignResourceLabelHandler` appends one current `ResourceLabel` assignment for an existing resource and tenant-scoped label definition. This use case is assignment only: it does not create or update labels, normalize label key/value data, expire label assignments, replace assignments, enforce one value per key, add primary label semantics, propagate labels, add API schemas, or introduce a generic temporal mutation abstraction.
+
+`AssignResourceLabelCommand` is an immutable transport-neutral dataclass with the actual fields required by the current `ResourceLabel` model: `tenant_id`, `resource_id`, `label_id`, `valid_from`, and nullable `source`. The command intentionally has no `is_primary`, `confidence_score`, `source_priority`, or classification fields because the mapped assignment table does not contain them.
+
+Validation starts before a Unit of Work is created. The handler rejects command-only failures with `ValidationError("Invalid resource label assignment command", failures=(...))`: `valid_from` must be timezone-aware, and `source` may be `None` but must not be blank when provided. The accepted `source` value is preserved as provided.
+
+After command-only validation, the handler opens one fresh Unit of Work and locks the tenant-scoped resource through `uow.resources.get_for_update(tenant_id, resource_id)`. Missing resources and wrong-tenant resources raise `EntityNotFoundError("Resource not found", entity_type="Resource", lookup_field="resource_id", lookup_value=resource_id)`. The handler performs no label lookup, assignment lookup, add, or commit after a resource miss.
+
+The handler validates the target label through `uow.labels.get_by_id(tenant_id, label_id)`. Missing and wrong-tenant labels raise `EntityNotFoundError("Label not found", entity_type="Label", lookup_field="label_id", lookup_value=label_id)`. Because `Label` exposes `is_active` and current write paths reject inactive definitions, inactive labels raise `ConflictError("Label is inactive", entity_type="Label", conflict_field="label_id", conflict_value=label_id)`. The assignment command does not create, update, reactivate, normalize, or inspect label key/value fields.
+
+Current duplicate checks use `uow.resource_labels.find_current(tenant_id, resource_id, label_id)`. If an equivalent current assignment already exists, the handler raises `ConflictError("Resource label is already assigned", entity_type="ResourceLabel", conflict_field="current", conflict_value=label_id)` and creates no redundant history row. The command deliberately does not implement one-label-value-per-key replacement, primary labels, or any classification-like cardinality rule; different labels may coexist on the same resource when the schema permits them, including different values for the same label key.
+
+On success, the handler constructs exactly one `ResourceLabel` with `valid_from=command.valid_from` and `valid_to=None`, adds it through `uow.resource_labels.add(...)`, materializes `ResourceLabelAssignedResult`, and calls `uow.commit()` exactly once as the final meaningful operation. It does not call `flush()` because label assignment ids are Python-generated and no server-generated fields are needed for the result. After commit it does not access repositories, Unit of Work properties, entities, or lazy attributes. Failures propagate without explicit handler rollback; Unit of Work cleanup owns rollback and session closure. Commit-time persistence translation remains available for label-assignment uniqueness races through `uq_resource_label_current`.
+
+Successful label assignment flow:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Handler as AssignResourceLabelHandler
+    participant Factory as UnitOfWorkFactory
+    participant UOW as UnitOfWork
+    participant ResourceRepo as ResourceRepository
+    participant LabelRepo as LabelRepository
+    participant ResourceLabelRepo as ResourceLabelRepository
+
+    Caller->>Handler: handle(AssignResourceLabelCommand)
+    Handler->>Handler: validate command values
+    Handler->>Factory: __call__()
+    Factory-->>Handler: fresh UnitOfWork
+    Handler->>UOW: __enter__()
+    Handler->>ResourceRepo: get_for_update(tenant_id, resource_id)
+    Handler->>LabelRepo: get_by_id(tenant_id, label_id)
+    Handler->>ResourceLabelRepo: find_current(...)
+    Handler->>Handler: construct ResourceLabel
+    Handler->>ResourceLabelRepo: add(resource_label)
+    Handler->>Handler: materialize ResourceLabelAssignedResult
+    Handler->>UOW: commit()
+    Handler->>UOW: __exit__()
+    Handler-->>Caller: ResourceLabelAssignedResult
+```
+
 ## Application Error Policy
 
 Application code raises technology-neutral application errors:
@@ -571,7 +615,7 @@ The concrete `session` property is infrastructure-facing and available only whil
 
 `SQLAlchemyUnitOfWork` accepts an injectable synchronous session factory. Production wiring uses the shared `SessionLocal` configured from the application engine. Tests inject their own isolated `sessionmaker` bound to the test engine. A Unit of Work creates exactly one session from the factory, closes that session on exit, and does not dispose the shared engine.
 
-`SQLAlchemyUnitOfWork` constructs `SQLAlchemyTenantRepository`, `SQLAlchemyOrganizationRepository`, `SQLAlchemyResourceRepository`, one `SQLAlchemyManagedCatalogRepository` per global managed catalog, one `SQLAlchemyClassificationValueRepository`, all temporal fact repositories, `SQLAlchemyResourceAliasRepository`, and `SQLAlchemyResourceMergeRepository` when `__enter__()` opens the session. `uow.tenants`, `uow.organizations`, `uow.resources`, `uow.resource_types`, `uow.identifier_types`, `uow.relationship_types`, `uow.ownership_roles`, `uow.classification_types`, `uow.classification_values`, `uow.lifecycle_statuses`, `uow.criticalities`, `uow.exposure_levels`, `uow.resource_identifiers`, `uow.resource_ownerships`, `uow.resource_relationships`, `uow.resource_classifications`, `uow.resource_labels`, `uow.resource_states`, `uow.resource_aliases`, and `uow.resource_merges` are available only while the Unit of Work is active, share the same session, and are cleared on exit. SQLAlchemy repositories may also be constructed directly with an active session for focused tests or low-level integration. They do not create sessions, engines, nested transactions, or repository-owned transaction boundaries. Repository instances are scoped to that Unit of Work lifetime and are not safe to reuse after the Unit of Work closes.
+`SQLAlchemyUnitOfWork` constructs `SQLAlchemyTenantRepository`, `SQLAlchemyOrganizationRepository`, `SQLAlchemyLabelRepository`, `SQLAlchemyResourceRepository`, one `SQLAlchemyManagedCatalogRepository` per global managed catalog, one `SQLAlchemyClassificationValueRepository`, all temporal fact repositories, `SQLAlchemyResourceAliasRepository`, and `SQLAlchemyResourceMergeRepository` when `__enter__()` opens the session. `uow.tenants`, `uow.organizations`, `uow.labels`, `uow.resources`, `uow.resource_types`, `uow.identifier_types`, `uow.relationship_types`, `uow.ownership_roles`, `uow.classification_types`, `uow.classification_values`, `uow.lifecycle_statuses`, `uow.criticalities`, `uow.exposure_levels`, `uow.resource_identifiers`, `uow.resource_ownerships`, `uow.resource_relationships`, `uow.resource_classifications`, `uow.resource_labels`, `uow.resource_states`, `uow.resource_aliases`, and `uow.resource_merges` are available only while the Unit of Work is active, share the same session, and are cleared on exit. SQLAlchemy repositories may also be constructed directly with an active session for focused tests or low-level integration. They do not create sessions, engines, nested transactions, or repository-owned transaction boundaries. Repository instances are scoped to that Unit of Work lifetime and are not safe to reuse after the Unit of Work closes.
 
 Catalog lookup remains read-only at the application boundary:
 
@@ -633,7 +677,7 @@ Tenant-scoped repository infrastructure requires explicit `tenant_id` for tenant
 
 All current managed catalog models use `code` and `is_active`; none define `sort_order`. Active-list methods therefore filter on `is_active IS true` and order by `code, id`. Classification-value active lists also filter by `classification_type_id`, exclude values from other types, and use the same `code, id` ordering within the type. Seeded rows are read through these repositories by their deterministic codes and UUIDs; the adapters do not duplicate seed data, alter seed codes, or expose catalog mutation.
 
-Temporal fact repositories use `TenantScopedSQLAlchemyRepository` and the schema's current-row predicate, `valid_to IS NULL`. Current methods apply tenant scope plus their exact resource, value, role, type, or endpoint predicates and never load all history for Python-side filtering. Identifier lookup includes exact current value lookup and current primary lookup for the schema-defined `tenant_id`, `resource_id`, and `identifier_type_id` primary scope. Ownership lookup includes exact current resource/organization/role lookup and current primary lookup for the schema-defined `tenant_id`, `resource_id`, and `ownership_role_id` primary scope. Classification lookup includes exact current resource/type/value lookup and current primary lookup for the schema-defined `tenant_id`, `resource_id`, and `classification_type_id` primary scope. State history uses the contract's only current history method and returns closed and current rows ordered by `valid_from, id`; other temporal contracts do not currently expose history methods. Current collection ordering is deterministic: identifiers by `identifier_type_id, namespace, normalized_value, id`; ownership by `ownership_role_id, is_primary DESC, organization_id, id`; outgoing relationships by `relationship_type_id, target_resource_id, id`; incoming relationships by `relationship_type_id, source_resource_id, id`; classifications by `classification_type_id, classification_value_id, id`; labels by `label_id, id`.
+Temporal fact repositories use `TenantScopedSQLAlchemyRepository` and the schema's current-row predicate, `valid_to IS NULL`. Current methods apply tenant scope plus their exact resource, value, role, type, label, or endpoint predicates and never load all history for Python-side filtering. Identifier lookup includes exact current value lookup and current primary lookup for the schema-defined `tenant_id`, `resource_id`, and `identifier_type_id` primary scope. Ownership lookup includes exact current resource/organization/role lookup and current primary lookup for the schema-defined `tenant_id`, `resource_id`, and `ownership_role_id` primary scope. Classification lookup includes exact current resource/type/value lookup and current primary lookup for the schema-defined `tenant_id`, `resource_id`, and `classification_type_id` primary scope. Label assignment lookup includes exact current resource/label lookup for the schema-defined `tenant_id`, `resource_id`, and `label_id` uniqueness scope. State history uses the contract's only current history method and returns closed and current rows ordered by `valid_from, id`; other temporal contracts do not currently expose history methods. Current collection ordering is deterministic: identifiers by `identifier_type_id, namespace, normalized_value, id`; ownership by `ownership_role_id, is_primary DESC, organization_id, id`; outgoing relationships by `relationship_type_id, target_resource_id, id`; incoming relationships by `relationship_type_id, source_resource_id, id`; classifications by `classification_type_id, classification_value_id, id`; labels by `label_id, id`.
 
 Temporal adapters are append/read only. `add(...)` attaches the new fact to the active Unit of Work session and does not flush automatically. Repositories do not close prior current rows, rewrite or delete history, validate state transitions, traverse organization hierarchies, resolve relationship graphs, create labels, mutate catalogs, translate database errors, or retry failed transactions. PostgreSQL constraints remain the source of truth for one-current-row rules, temporal interval validity, tenant-consistent resource references, relationship endpoint validity, classification type/value integrity, label assignment integrity, and original `IntegrityError` propagation.
 
