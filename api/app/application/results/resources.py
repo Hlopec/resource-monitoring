@@ -79,6 +79,20 @@ class ResourceRelationshipAssignedResult:
 
 
 @dataclass(frozen=True)
+class ResourceAliasAssignedResult:
+    """Result returned after a resource alias assignment is committed."""
+
+    alias_id: UUID
+    resource_id: UUID
+    alias_type: str
+    alias_value: str
+    normalized_value: str
+    first_seen_at: datetime
+    last_seen_at: datetime
+    source: str | None
+
+
+@dataclass(frozen=True)
 class ResourceClassificationAssignedResult:
     """Result returned after a resource classification assignment is committed."""
 

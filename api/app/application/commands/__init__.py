@@ -1,6 +1,7 @@
 """Immutable application command contracts."""
 
 from app.application.commands.resources import (
+    AssignResourceAliasCommand,
     AssignResourceClassificationCommand,
     AssignResourceIdentifierCommand,
     AssignResourceLabelCommand,
@@ -12,6 +13,7 @@ from app.application.commands.resources import (
 )
 
 __all__ = [
+    "AssignResourceAliasCommand",
     "AssignResourceClassificationCommand",
     "AssignResourceIdentifierCommand",
     "AssignResourceLabelCommand",

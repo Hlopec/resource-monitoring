@@ -18,6 +18,7 @@ from app.application.errors import (
     ValidationFailure,
 )
 from app.application.handlers import (
+    AssignResourceAliasHandler,
     AssignResourceClassificationHandler,
     AssignResourceIdentifierHandler,
     AssignResourceLabelHandler,
@@ -459,6 +460,7 @@ def test_handler_protocols_define_direct_handle_contracts() -> None:
 
 def test_reference_handlers_depend_on_unit_of_work_factory_only() -> None:
     for handler_type in (
+        AssignResourceAliasHandler,
         AssignResourceClassificationHandler,
         AssignResourceIdentifierHandler,
         AssignResourceLabelHandler,

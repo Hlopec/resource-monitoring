@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.application.commands import (
+    AssignResourceAliasCommand,
     AssignResourceClassificationCommand,
     AssignResourceIdentifierCommand,
     AssignResourceLabelCommand,
@@ -27,9 +28,10 @@ from app.application.queries import (
     GetResourceDetailsQuery,
 )
 from app.application.results import (
+    ResourceAliasAssignedResult,
+    ResourceAliasResult,
     ResourceClassificationAssignedResult,
     ResourceIdentifierAssignedResult,
-    ResourceAliasResult,
     ResourceClassificationResult,
     ResourceCreatedResult,
     ResourceDetailsResult,
@@ -46,6 +48,7 @@ from app.application.results import (
 )
 from app.models import (
     Resource,
+    ResourceAlias,
     ResourceClassification,
     ResourceIdentifier,
     ResourceLabel,
@@ -556,6 +559,75 @@ class AssignResourceRelationshipHandler:
             return result
 
 
+class AssignResourceAliasHandler:
+    """Command handler for assigning one alias to a resource."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def handle(
+        self,
+        command: AssignResourceAliasCommand,
+    ) -> ResourceAliasAssignedResult:
+        """Append one alias row, commit once, and return a result."""
+        _validate_assign_resource_alias_command(command)
+        with self._uow_factory() as uow:
+            resource = uow.resources.get_for_update(
+                command.tenant_id,
+                command.resource_id,
+            )
+            if resource is None:
+                raise EntityNotFoundError(
+                    "Resource not found",
+                    entity_type="Resource",
+                    lookup_field="resource_id",
+                    lookup_value=command.resource_id,
+                )
+            existing_resource = uow.resource_aliases.find_resource_by_alias(
+                command.tenant_id,
+                command.alias_type,
+                command.normalized_value,
+            )
+            if existing_resource is not None:
+                if existing_resource.id == command.resource_id:
+                    raise ConflictError(
+                        "Resource alias is already assigned",
+                        entity_type="ResourceAlias",
+                        conflict_field="alias",
+                        conflict_value=command.normalized_value,
+                    )
+                raise ConflictError(
+                    "Resource alias is already assigned to another Resource",
+                    entity_type="ResourceAlias",
+                    conflict_field="alias",
+                    conflict_value=command.normalized_value,
+                )
+
+            alias = ResourceAlias(
+                tenant_id=command.tenant_id,
+                resource_id=command.resource_id,
+                alias_type=command.alias_type,
+                alias_value=command.alias_value,
+                normalized_value=command.normalized_value,
+                source=command.source,
+                first_seen_at=command.first_seen_at,
+                last_seen_at=command.last_seen_at,
+            )
+            uow.resource_aliases.add(alias)
+            result = ResourceAliasAssignedResult(
+                alias_id=alias.id,
+                resource_id=command.resource_id,
+                alias_type=command.alias_type,
+                alias_value=command.alias_value,
+                normalized_value=command.normalized_value,
+                first_seen_at=command.first_seen_at,
+                last_seen_at=command.last_seen_at,
+                source=command.source,
+            )
+            uow.commit()
+            return result
+
+
 class AssignResourceClassificationHandler:
     """Command handler for assigning one current classification to a resource."""
 
@@ -852,6 +924,48 @@ def _validate_assign_resource_relationship_command(
     if failures:
         raise ValidationError(
             "Invalid resource relationship assignment command",
+            failures=tuple(failures),
+        )
+
+
+def _validate_assign_resource_alias_command(
+    command: AssignResourceAliasCommand,
+) -> None:
+    failures: list[ValidationFailure] = []
+    if command.alias_type.strip() == "":
+        failures.append(ValidationFailure("alias_type", "must not be blank"))
+    if command.alias_value.strip() == "":
+        failures.append(ValidationFailure("alias_value", "must not be blank"))
+    if command.normalized_value.strip() == "":
+        failures.append(ValidationFailure("normalized_value", "must not be blank"))
+    if command.source is not None and command.source.strip() == "":
+        failures.append(ValidationFailure("source", "must not be blank when provided"))
+    first_seen_at_is_aware = (
+        command.first_seen_at.tzinfo is not None
+        and command.first_seen_at.utcoffset() is not None
+    )
+    last_seen_at_is_aware = (
+        command.last_seen_at.tzinfo is not None
+        and command.last_seen_at.utcoffset() is not None
+    )
+    if not first_seen_at_is_aware:
+        failures.append(ValidationFailure("first_seen_at", "must be timezone-aware"))
+    if not last_seen_at_is_aware:
+        failures.append(ValidationFailure("last_seen_at", "must be timezone-aware"))
+    if (
+        first_seen_at_is_aware
+        and last_seen_at_is_aware
+        and command.last_seen_at < command.first_seen_at
+    ):
+        failures.append(
+            ValidationFailure(
+                "last_seen_at",
+                "must not be earlier than first_seen_at",
+            )
+        )
+    if failures:
+        raise ValidationError(
+            "Invalid resource alias assignment command",
             failures=tuple(failures),
         )
 

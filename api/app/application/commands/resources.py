@@ -92,6 +92,20 @@ class AssignResourceRelationshipCommand:
 
 
 @dataclass(frozen=True)
+class AssignResourceAliasCommand:
+    """Command to append one alias row for a resource."""
+
+    tenant_id: UUID
+    resource_id: UUID
+    alias_type: str
+    alias_value: str
+    normalized_value: str
+    source: str | None
+    first_seen_at: datetime
+    last_seen_at: datetime
+
+
+@dataclass(frozen=True)
 class AssignResourceClassificationCommand:
     """Command to append one current classification row for a resource."""
 
