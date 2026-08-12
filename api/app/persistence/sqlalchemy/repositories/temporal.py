@@ -134,6 +134,23 @@ class SQLAlchemyResourceOwnershipRepository(
             )
         )
 
+    def find_current(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+        organization_id: UUID,
+        ownership_role_id: UUID,
+    ) -> ResourceOwnership | None:
+        return self._scalar(
+            current_temporal_statement(self, tenant_id)
+            .where(
+                ResourceOwnership.resource_id == resource_id,
+                ResourceOwnership.organization_id == organization_id,
+                ResourceOwnership.ownership_role_id == ownership_role_id,
+            )
+            .order_by(ResourceOwnership.id)
+        )
+
     def get_current_primary(
         self,
         tenant_id: UUID,

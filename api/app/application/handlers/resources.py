@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from app.application.commands import (
     AssignResourceIdentifierCommand,
+    AssignResourceOwnershipCommand,
     CreateResourceCommand,
     EnsureResourceExistsCommand,
     TransitionResourceStateCommand,
@@ -31,12 +32,13 @@ from app.application.results import (
     ResourceIdentifierResult,
     ResourceLabelResult,
     ResourceMergeResult,
+    ResourceOwnershipAssignedResult,
     ResourceOwnershipResult,
     ResourceReadResult,
     ResourceStateTransitionedResult,
     ResourceStateResult,
 )
-from app.models import Resource, ResourceIdentifier, ResourceState
+from app.models import Resource, ResourceIdentifier, ResourceOwnership, ResourceState
 
 INITIAL_RESOURCE_RECORD_VERSION = 1
 
@@ -359,6 +361,99 @@ class AssignResourceIdentifierHandler:
             return result
 
 
+class AssignResourceOwnershipHandler:
+    """Command handler for assigning one current owner to a resource."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def handle(
+        self,
+        command: AssignResourceOwnershipCommand,
+    ) -> ResourceOwnershipAssignedResult:
+        """Append one ownership fact, commit once, and return a materialized result."""
+        _validate_assign_resource_ownership_command(command)
+        with self._uow_factory() as uow:
+            resource = uow.resources.get_for_update(
+                command.tenant_id,
+                command.resource_id,
+            )
+            if resource is None:
+                raise EntityNotFoundError(
+                    "Resource not found",
+                    entity_type="Resource",
+                    lookup_field="resource_id",
+                    lookup_value=command.resource_id,
+                )
+            organization = uow.organizations.get_by_id(
+                command.tenant_id,
+                command.organization_id,
+            )
+            if organization is None:
+                raise EntityNotFoundError(
+                    "Organization not found",
+                    entity_type="Organization",
+                    lookup_field="organization_id",
+                    lookup_value=command.organization_id,
+                )
+            _require_active_catalog(
+                uow.ownership_roles,
+                command.ownership_role_id,
+                entity_type="OwnershipRole",
+                lookup_field="ownership_role_id",
+            )
+            current_ownership = uow.resource_ownerships.find_current(
+                command.tenant_id,
+                command.resource_id,
+                command.organization_id,
+                command.ownership_role_id,
+            )
+            if current_ownership is not None:
+                raise ConflictError(
+                    "Resource ownership is already assigned",
+                    entity_type="ResourceOwnership",
+                    conflict_field="current",
+                    conflict_value=command.organization_id,
+                )
+            if command.is_primary:
+                current_primary = uow.resource_ownerships.get_current_primary(
+                    command.tenant_id,
+                    command.resource_id,
+                    command.ownership_role_id,
+                )
+                if current_primary is not None:
+                    raise ConflictError(
+                        "Resource ownership primary already exists",
+                        entity_type="ResourceOwnership",
+                        conflict_field="current_primary",
+                        conflict_value=command.ownership_role_id,
+                    )
+
+            ownership = ResourceOwnership(
+                tenant_id=command.tenant_id,
+                resource_id=command.resource_id,
+                organization_id=command.organization_id,
+                ownership_role_id=command.ownership_role_id,
+                is_primary=command.is_primary,
+                confidence_score=command.confidence_score,
+                valid_from=command.valid_from,
+                valid_to=None,
+                source=command.source,
+            )
+            uow.resource_ownerships.add(ownership)
+            result = ResourceOwnershipAssignedResult(
+                resource_id=command.resource_id,
+                ownership_id=ownership.id,
+                organization_id=command.organization_id,
+                ownership_role_id=command.ownership_role_id,
+                is_primary=command.is_primary,
+                valid_from=command.valid_from,
+                source=command.source,
+            )
+            uow.commit()
+            return result
+
+
 def _validate_create_resource_command(command: CreateResourceCommand) -> None:
     failures: list[ValidationFailure] = []
     if command.canonical_name.strip() == "":
@@ -401,6 +496,31 @@ def _validate_create_resource_command(command: CreateResourceCommand) -> None:
     if failures:
         raise ValidationError(
             "Invalid resource creation command",
+            failures=tuple(failures),
+        )
+
+
+def _validate_assign_resource_ownership_command(
+    command: AssignResourceOwnershipCommand,
+) -> None:
+    failures: list[ValidationFailure] = []
+    if command.confidence_score < Decimal("0") or command.confidence_score > Decimal(
+        "1"
+    ):
+        failures.append(
+            ValidationFailure("confidence_score", "must be between 0 and 1")
+        )
+    valid_from_is_aware = (
+        command.valid_from.tzinfo is not None
+        and command.valid_from.utcoffset() is not None
+    )
+    if not valid_from_is_aware:
+        failures.append(ValidationFailure("valid_from", "must be timezone-aware"))
+    if command.source is not None and command.source.strip() == "":
+        failures.append(ValidationFailure("source", "must not be blank when provided"))
+    if failures:
+        raise ValidationError(
+            "Invalid resource ownership assignment command",
             failures=tuple(failures),
         )
 

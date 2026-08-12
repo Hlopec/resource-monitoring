@@ -54,6 +54,19 @@ class ResourceIdentifierAssignedResult:
 
 
 @dataclass(frozen=True)
+class ResourceOwnershipAssignedResult:
+    """Result returned after a resource ownership assignment is committed."""
+
+    resource_id: UUID
+    ownership_id: UUID
+    organization_id: UUID
+    ownership_role_id: UUID
+    is_primary: bool
+    valid_from: datetime
+    source: str | None
+
+
+@dataclass(frozen=True)
 class ResourceStateResult:
     """Current resource state projection."""
 
