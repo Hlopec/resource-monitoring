@@ -114,6 +114,7 @@ def _tenant(slug: str) -> Tenant:
 def test_translator_exports_explicit_constraint_mapping() -> None:
     assert UNIQUE_VIOLATION == "23505"
     assert "uq_resource_state_current" in CONSTRAINT_TRANSLATORS
+    assert "uq_resource_relationship_current" in CONSTRAINT_TRANSLATORS
     assert "uq_resource_alias_tenant_alias_type_normalized_value" in CONSTRAINT_TRANSLATORS
 
 

@@ -79,6 +79,19 @@ class AssignResourceOwnershipCommand:
 
 
 @dataclass(frozen=True)
+class AssignResourceRelationshipCommand:
+    """Command to append one current relationship row between two resources."""
+
+    tenant_id: UUID
+    source_resource_id: UUID
+    relationship_type_id: UUID
+    target_resource_id: UUID
+    confidence_score: Decimal
+    valid_from: datetime
+    source: str | None
+
+
+@dataclass(frozen=True)
 class AssignResourceClassificationCommand:
     """Command to append one current classification row for a resource."""
 

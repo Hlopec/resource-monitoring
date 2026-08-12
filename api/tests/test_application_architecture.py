@@ -22,6 +22,7 @@ from app.application.handlers import (
     AssignResourceIdentifierHandler,
     AssignResourceLabelHandler,
     AssignResourceOwnershipHandler,
+    AssignResourceRelationshipHandler,
     CommandHandler,
     CreateResourceHandler,
     EnsureResourceExistsHandler,
@@ -462,6 +463,7 @@ def test_reference_handlers_depend_on_unit_of_work_factory_only() -> None:
         AssignResourceIdentifierHandler,
         AssignResourceLabelHandler,
         AssignResourceOwnershipHandler,
+        AssignResourceRelationshipHandler,
         EnsureResourceExistsHandler,
         CreateResourceHandler,
         GetResourceByCanonicalNameHandler,
@@ -516,6 +518,7 @@ def test_repository_protocols_define_expected_signatures() -> None:
         (ResourceIdentifierRepository, "get_current_primary"): ResourceIdentifier | None,
         (ResourceOwnershipRepository, "find_current"): ResourceOwnership | None,
         (ResourceOwnershipRepository, "get_current_primary"): ResourceOwnership | None,
+        (ResourceRelationshipRepository, "find_current"): ResourceRelationship | None,
         (ResourceClassificationRepository, "find_current"): ResourceClassification
         | None,
         (ResourceClassificationRepository, "get_current_primary"): ResourceClassification | None,

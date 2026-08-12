@@ -67,6 +67,18 @@ class ResourceOwnershipAssignedResult:
 
 
 @dataclass(frozen=True)
+class ResourceRelationshipAssignedResult:
+    """Result returned after a resource relationship assignment is committed."""
+
+    relationship_id: UUID
+    source_resource_id: UUID
+    relationship_type_id: UUID
+    target_resource_id: UUID
+    valid_from: datetime
+    source: str | None
+
+
+@dataclass(frozen=True)
 class ResourceClassificationAssignedResult:
     """Result returned after a resource classification assignment is committed."""
 
