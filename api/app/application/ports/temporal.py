@@ -60,6 +60,16 @@ class ResourceOwnershipRepository(Protocol):
         """Return current ownership rows for a resource."""
         ...
 
+    def find_current(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+        organization_id: UUID,
+        ownership_role_id: UUID,
+    ) -> ResourceOwnership | None:
+        """Return a current ownership row by resource, organization, and role."""
+        ...
+
     def get_current_primary(
         self,
         tenant_id: UUID,

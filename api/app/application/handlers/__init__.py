@@ -3,6 +3,7 @@
 from app.application.handlers.protocols import CommandHandler, QueryHandler
 from app.application.handlers.resources import (
     AssignResourceIdentifierHandler,
+    AssignResourceOwnershipHandler,
     CreateResourceHandler,
     EnsureResourceExistsHandler,
     GetResourceByCanonicalNameHandler,
@@ -13,6 +14,7 @@ from app.application.handlers.resources import (
 
 __all__ = [
     "AssignResourceIdentifierHandler",
+    "AssignResourceOwnershipHandler",
     "CommandHandler",
     "CreateResourceHandler",
     "EnsureResourceExistsHandler",

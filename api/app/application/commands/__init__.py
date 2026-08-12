@@ -2,6 +2,7 @@
 
 from app.application.commands.resources import (
     AssignResourceIdentifierCommand,
+    AssignResourceOwnershipCommand,
     CreateResourceCommand,
     EnsureResourceExistsCommand,
     TransitionResourceStateCommand,
@@ -9,6 +10,7 @@ from app.application.commands.resources import (
 
 __all__ = [
     "AssignResourceIdentifierCommand",
+    "AssignResourceOwnershipCommand",
     "CreateResourceCommand",
     "EnsureResourceExistsCommand",
     "TransitionResourceStateCommand",

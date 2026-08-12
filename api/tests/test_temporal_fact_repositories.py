@@ -555,6 +555,51 @@ def test_ownership_current_reads_are_tenant_scoped_and_primary_aware(
     ]
     assert repository.get_current_for_resource(refs.other_tenant_id, refs.resource_id) == []
     assert (
+        repository.find_current(
+            refs.tenant_id,
+            refs.resource_id,
+            refs.organization_id,
+            refs.ownership_role_id,
+        )
+        is current
+    )
+    assert (
+        repository.find_current(
+            refs.other_tenant_id,
+            refs.resource_id,
+            refs.organization_id,
+            refs.ownership_role_id,
+        )
+        is None
+    )
+    assert (
+        repository.find_current(
+            refs.tenant_id,
+            refs.other_resource_id,
+            refs.organization_id,
+            refs.ownership_role_id,
+        )
+        is None
+    )
+    assert (
+        repository.find_current(
+            refs.tenant_id,
+            refs.resource_id,
+            uuid4(),
+            refs.ownership_role_id,
+        )
+        is None
+    )
+    assert (
+        repository.find_current(
+            refs.tenant_id,
+            refs.resource_id,
+            refs.organization_id,
+            uuid4(),
+        )
+        is None
+    )
+    assert (
         repository.get_current_primary(
             refs.tenant_id,
             refs.resource_id,
