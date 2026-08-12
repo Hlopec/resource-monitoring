@@ -135,6 +135,18 @@ FORBIDDEN_REPLACEMENT_METHODS = {
     "unmerge_resources",
     "upsert_current",
 }
+FORBIDDEN_FRAMEWORK_NAMES = {
+    "BaseResourceHandler",
+    "CommandBus",
+    "CommandDispatcher",
+    "GenericAssignmentHandler",
+    "GenericTemporalService",
+    "GraphService",
+    "HandlerRegistry",
+    "Mediator",
+    "RepositoryRegistry",
+    "ServiceLocator",
+}
 FORBIDDEN_READ_ONLY_CATALOG_METHODS = FORBIDDEN_REPOSITORY_METHODS | {
     "add",
     "delete",
@@ -193,6 +205,24 @@ ALL_REPOSITORY_PROTOCOLS = (
     ResourceAliasRepository,
     ResourceMergeRepository,
 )
+READ_HANDLER_TYPES = (
+    GetResourceByCanonicalNameHandler,
+    GetResourceByIdHandler,
+    GetResourceDetailsHandler,
+    ResolveCanonicalResourceHandler,
+)
+WRITE_HANDLER_TYPES = (
+    AssignResourceAliasHandler,
+    AssignResourceClassificationHandler,
+    AssignResourceIdentifierHandler,
+    AssignResourceLabelHandler,
+    AssignResourceOwnershipHandler,
+    AssignResourceRelationshipHandler,
+    CreateResourceHandler,
+    EnsureResourceExistsHandler,
+    MergeResourceHandler,
+    TransitionResourceStateHandler,
+)
 
 
 def _python_files(path: Path) -> list[Path]:
@@ -221,6 +251,28 @@ def _public_methods(protocol: type) -> list[tuple[str, object]]:
 def _function_names_for(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     return {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+
+
+def _called_attribute_names_for(handler_type: type) -> set[str]:
+    source = inspect.getsource(handler_type)
+    tree = ast.parse(source)
+    return {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+
+def _attribute_call_count(handler_type: type, attribute_name: str) -> int:
+    source = inspect.getsource(handler_type)
+    tree = ast.parse(source)
+    return sum(
+        1
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == attribute_name
+    )
 
 
 def _contains_optional_none(annotation: object) -> bool:
@@ -461,28 +513,27 @@ def test_handler_protocols_define_direct_handle_contracts() -> None:
 
 
 def test_reference_handlers_depend_on_unit_of_work_factory_only() -> None:
-    for handler_type in (
-        AssignResourceAliasHandler,
-        AssignResourceClassificationHandler,
-        AssignResourceIdentifierHandler,
-        AssignResourceLabelHandler,
-        AssignResourceOwnershipHandler,
-        AssignResourceRelationshipHandler,
-        EnsureResourceExistsHandler,
-        CreateResourceHandler,
-        GetResourceByCanonicalNameHandler,
-        GetResourceByIdHandler,
-        GetResourceDetailsHandler,
-        MergeResourceHandler,
-        ResolveCanonicalResourceHandler,
-        TransitionResourceStateHandler,
-    ):
+    for handler_type in (*READ_HANDLER_TYPES, *WRITE_HANDLER_TYPES):
         hints = get_type_hints(handler_type.__init__)
         assert hints["uow_factory"] is UnitOfWorkFactory
         assert list(inspect.signature(handler_type.__init__).parameters) == [
             "self",
             "uow_factory",
         ]
+
+
+def test_read_handlers_never_commit_or_mutate() -> None:
+    for handler_type in READ_HANDLER_TYPES:
+        called_methods = _called_attribute_names_for(handler_type)
+        assert "commit" not in called_methods, handler_type
+        assert "rollback" not in called_methods, handler_type
+        assert "get_for_update" not in called_methods, handler_type
+
+
+def test_write_handlers_commit_once_and_do_not_rollback() -> None:
+    for handler_type in WRITE_HANDLER_TYPES:
+        assert _attribute_call_count(handler_type, "commit") == 1, handler_type
+        assert _attribute_call_count(handler_type, "rollback") == 0, handler_type
 
 
 def test_canonical_resolution_handler_is_read_only() -> None:
@@ -497,6 +548,39 @@ def test_canonical_resolution_handler_is_read_only() -> None:
     assert "commit" not in called_methods
     assert "get_for_update" not in called_methods
     assert ".add(" not in source.replace("visited.add(", "")
+    assert "path_compression" not in source
+    assert "canonical_resource_id =" not in source
+
+
+def test_merge_handler_remains_lineage_only() -> None:
+    source = inspect.getsource(MergeResourceHandler)
+    assert "ResourceMerge(" in source
+    assert "ResourceAlias(" not in source
+    assert "ResourceIdentifier(" not in source
+    assert "ResourceOwnership(" not in source
+    assert "ResourceClassification(" not in source
+    assert "ResourceLabel(" not in source
+    assert "ResourceRelationship(" not in source
+    assert "current_resource_id" not in source
+
+
+def test_no_hidden_application_frameworks_are_introduced() -> None:
+    for path in _python_files(APPLICATION_ROOT):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        defined_names = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef | ast.FunctionDef)
+        }
+        assert FORBIDDEN_FRAMEWORK_NAMES.isdisjoint(defined_names), path
+
+
+def test_multi_resource_handlers_share_deterministic_lock_order_helper() -> None:
+    relationship_source = inspect.getsource(AssignResourceRelationshipHandler)
+    merge_source = inspect.getsource(MergeResourceHandler)
+
+    assert "_ordered_resource_ids(" in relationship_source
+    assert "_ordered_resource_ids(" in merge_source
 
 
 def test_collection_repository_methods_return_sequence() -> None:

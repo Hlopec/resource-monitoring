@@ -564,9 +564,9 @@ class AssignResourceRelationshipHandler:
         """Append one directed relationship fact, commit once, and return a result."""
         _validate_assign_resource_relationship_command(command)
         with self._uow_factory() as uow:
-            for resource_id in sorted(
-                (command.source_resource_id, command.target_resource_id),
-                key=str,
+            for resource_id in _ordered_resource_ids(
+                command.source_resource_id,
+                command.target_resource_id,
             ):
                 resource = uow.resources.get_for_update(command.tenant_id, resource_id)
                 if resource is None:
@@ -718,9 +718,9 @@ class MergeResourceHandler:
         """Record one source-to-target merge edge, commit once, and return a result."""
         _validate_merge_resource_command(command)
         with self._uow_factory() as uow:
-            for resource_id in sorted(
-                (command.source_resource_id, command.target_resource_id),
-                key=str,
+            for resource_id in _ordered_resource_ids(
+                command.source_resource_id,
+                command.target_resource_id,
             ):
                 resource = uow.resources.get_for_update(command.tenant_id, resource_id)
                 if resource is None:
@@ -1289,6 +1289,13 @@ def _require_active_catalog(
             conflict_field=lookup_field,
             conflict_value=catalog_id,
         )
+
+
+def _ordered_resource_ids(
+    first_resource_id: UUID,
+    second_resource_id: UUID,
+) -> tuple[UUID, UUID]:
+    return tuple(sorted((first_resource_id, second_resource_id), key=str))
 
 
 def _build_resource_read_result(resource: Resource) -> ResourceReadResult:
