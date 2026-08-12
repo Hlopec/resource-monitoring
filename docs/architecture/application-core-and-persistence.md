@@ -6,7 +6,7 @@ Stage `03.0` establishes the boundary rules for the application core and Postgre
 
 ## Non-goals
 
-This stage does not implement API routes, FastAPI dependency wiring, Pydantic request or response schemas, lifecycle business use cases, temporal replacement workflows, merge workflows, collectors, background jobs, command buses, mediators, handler registries, decorators, middleware, event buses, partitioning, sharding, async SQLAlchemy, or new database tables. Existing merged Alembic migrations are not edited.
+This stage does not implement API routes, FastAPI dependency wiring, Pydantic request or response schemas, broad lifecycle business workflows, generic temporal replacement frameworks, merge workflows, collectors, background jobs, command buses, mediators, handler registries, decorators, middleware, event buses, partitioning, sharding, async SQLAlchemy, or new database tables. Existing merged Alembic migrations are not edited.
 
 ## Current-State Assessment
 
@@ -117,7 +117,7 @@ Global managed catalog repositories deliberately do not accept `tenant_id`; `res
 
 The resource aggregate contract includes `get_for_update(...)` to reserve a place for explicit concurrent mutation workflows. It does not expose SQLAlchemy lock expressions. Identifier-based resource matching belongs to `ResourceIdentifierRepository`; canonical merge traversal belongs to later merge/query service work and is not exposed on `ResourceRepository` in this stage.
 
-Temporal fact repositories expose current lookup boundaries and `add(...)`; `ResourceStateRepository` also exposes state history. They do not expose `close_current(...)`, `replace_current(...)`, history deletion, or a universal temporal repository framework because temporal replacement semantics belong to later application-service issues.
+Temporal fact repositories expose current lookup boundaries and `add(...)`; `ResourceStateRepository` also exposes state history. They do not expose `close_current(...)`, `replace_current(...)`, history deletion, or a universal temporal repository framework because replacement semantics belong in explicit application-service commands.
 
 Alias and merge contracts expose alias resolution and merge-lineage persistence only. They do not implement merge execution, canonical traversal, alias transfer, deduplication, or conflict-resolution workflows.
 
@@ -140,6 +140,18 @@ Commands are immutable, technology-neutral data contracts. They carry validated 
 - `confidence_score: Decimal`
 - `first_seen_at: datetime`
 - `last_seen_at: datetime`
+
+`TransitionResourceStateCommand` is the resource state replacement write command. It carries exactly the fields needed to replace the current `resource_state` row for one tenant-owned resource:
+
+- `tenant_id: UUID`
+- `resource_id: UUID`
+- `lifecycle_status_id: UUID`
+- `criticality_id: UUID`
+- `exposure_level_id: UUID`
+- `source_priority: int`
+- `confidence_score: Decimal`
+- `transitioned_at: datetime`
+- `source: str | None`
 
 Queries are immutable, technology-neutral read contracts. They carry lookup input for read-only handlers and do not expose SQLAlchemy `Result`, `Query`, `Select`, sessions, transactions, pagination frameworks, or specification objects. `GetResourceByIdQuery` is the narrow reference lookup from the architecture baseline. `GetResourceDetailsQuery` reads a full tenant-scoped resource projection by resource id. `GetResourceByCanonicalNameQuery` reads the same projection through the existing resource canonical-name repository contract.
 
@@ -165,8 +177,9 @@ The first handlers are intentionally limited:
 - `GetResourceDetailsHandler` reads `uow.resources.get_by_id(...)` and composes a fully materialized `ResourceDetailsResult`.
 - `GetResourceByCanonicalNameHandler` reads `uow.resources.get_by_canonical_name(...)` and composes the same `ResourceDetailsResult`.
 - `EnsureResourceExistsHandler` checks `uow.resources.exists(...)` and commits once only when the resource exists.
+- `TransitionResourceStateHandler` locks the resource with `uow.resources.get_for_update(...)`, closes the current `ResourceState` when present, appends the replacement state, updates the `Resource` snapshot fields, materializes `ResourceStateTransitionedResult`, and commits once as the final operation.
 
-They do not update resources, implement lifecycle transitions, close temporal facts, create related facts, execute merges, resolve canonical lineage, expose APIs, or define broader onboarding workflows.
+They do not create related facts, execute merges, resolve canonical lineage, expose APIs, or define broader onboarding workflows.
 
 ## UnitOfWorkFactory
 
@@ -185,6 +198,8 @@ The factory returns a fresh Unit of Work for one handler execution. The applicat
 Application results are immutable typed dataclasses. They are transport-neutral and contain explicit fields rather than `dict[str, Any]`, HTTP response objects, Pydantic models, SQLAlchemy `Row` values, sessions, or lazy query objects.
 
 `ResourceCreatedResult` is the first production write result. It is materialized before commit and contains `resource_id`, `tenant_id`, `canonical_name`, and `record_version`. The `Resource` id is generated in Python during mapped entity construction through the UUIDv7 mixin, and the initial resource `record_version` follows the current mapper policy of starting at `1`, so the create handler does not expose a generic application-level flush operation.
+
+`ResourceStateTransitionedResult` is materialized before commit and contains `resource_id`, `previous_state_id`, `new_state_id`, and `transitioned_at`. `previous_state_id` is `None` when the command creates the first state row for a resource. The replacement `ResourceState` id is generated in Python during mapped entity construction, so the transition handler also does not require an application-facing flush operation.
 
 `ResourceReadResult` is the narrow reference read result. `ResourceDetailsResult` is the first production read projection. It copies scalar resource fields and current related facts into immutable dataclasses:
 
@@ -265,6 +280,58 @@ sequenceDiagram
 ```
 
 Commit is the final meaningful operation. After `uow.commit()`, the handler does not access repositories, Unit of Work properties, `uow.session`, the `Resource` entity, or lazy attributes. Failures propagate without explicit handler rollback; cleanup remains the Unit of Work context manager's responsibility.
+
+## Resource State Transition Command
+
+`TransitionResourceStateHandler` is the first production temporal replacement use case. It is intentionally specific to `ResourceState`; it does not introduce a reusable temporal mutation framework, a close-current repository helper, retry behavior, API schemas, migrations, or persistence adapter changes.
+
+Validation starts before a Unit of Work is created. The handler rejects command-only failures with `ValidationError("Invalid resource state transition command", failures=(...))`:
+
+- `source_priority` must be between `0` and `1000`, preserving compatibility with the current `Resource` snapshot constraint.
+- `confidence_score` must be between `0` and `1`.
+- `transitioned_at` must be timezone-aware.
+- `source` may be `None`; when present it must not be blank or whitespace-only.
+
+After command-only validation, the handler opens one fresh Unit of Work and locks the tenant-scoped resource through `uow.resources.get_for_update(tenant_id, resource_id)`. A missing resource or wrong-tenant resource raises the same `EntityNotFoundError` shape with `entity_type="Resource"` and `lookup_field="resource_id"`, and the handler performs no catalog or state reads afterward. The lock is acquired before current-state lookup so competing state transitions serialize on the resource row inside PostgreSQL. The stable automated coverage verifies this repository contract and operation order; it does not run a timing-sensitive multi-session blocking test.
+
+The handler validates target `LifecycleStatus`, `Criticality`, and `ExposureLevel` through the global managed catalog repositories. Missing catalog rows raise `EntityNotFoundError`; inactive rows raise `ConflictError`; neither path mutates the current state. Catalogs are not created, reactivated, or tenant-scoped by this command.
+
+The current state is loaded with `uow.resource_states.get_current(tenant_id, resource_id)`. If no current state exists, the command is allowed to create the first `ResourceState`, and the result reports `previous_state_id=None`. If a current state exists, `transitioned_at` must be strictly later than `current_state.valid_from`; equality is rejected. Unchanged transitions are rejected with `ConflictError("Resource state is unchanged", entity_type="ResourceState", conflict_field="state", conflict_value=resource_id)`. The no-op comparison includes `lifecycle_status_id`, `criticality_id`, `exposure_level_id`, `source_priority`, `confidence_score`, and `source`; it deliberately ignores ids and validity-window fields.
+
+Successful replacement closes only the current row by setting `current_state.valid_to = transitioned_at`, constructs exactly one new `ResourceState` with `valid_from=transitioned_at` and `valid_to=None`, and adds it through `uow.resource_states.add(...)`. It also updates the locked `Resource` snapshot fields that mirror current state: `lifecycle_status_id`, `criticality_id`, `exposure_level_id`, `source_priority`, and `confidence_score`. This keeps the documented `resource`/current-`resource_state` invariant intact while preserving closed history rows unchanged. Resource state transitions do not modify observation timestamps such as `Resource.last_seen_at`; observation and discovery timestamps belong to a dedicated future observation workflow.
+
+The handler materializes `ResourceStateTransitionedResult` before commit and calls `uow.commit()` once as the final meaningful operation. It does not call `flush()`: UUIDv7 ids are assigned when mapped objects are constructed, and the result needs no server-generated values. PostgreSQL constraints remain the final guard for races and invariant violations; broad `IntegrityError` translation, deadlock or serialization retries, and a generic temporal command framework remain deferred.
+
+Successful transition flow:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Handler as TransitionResourceStateHandler
+    participant Factory as UnitOfWorkFactory
+    participant UOW as UnitOfWork
+    participant ResourceRepo as ResourceRepository
+    participant CatalogRepo as Catalog Repositories
+    participant StateRepo as ResourceStateRepository
+
+    Caller->>Handler: handle(TransitionResourceStateCommand)
+    Handler->>Handler: validate command values
+    Handler->>Factory: __call__()
+    Factory-->>Handler: fresh UnitOfWork
+    Handler->>UOW: __enter__()
+    Handler->>ResourceRepo: get_for_update(tenant_id, resource_id)
+    Handler->>CatalogRepo: get_by_id(target catalog ids)
+    Handler->>StateRepo: get_current(tenant_id, resource_id)
+    Handler->>Handler: validate time and no-op policy
+    Handler->>Handler: close current row when present
+    Handler->>Handler: construct replacement ResourceState
+    Handler->>StateRepo: add(new_state)
+    Handler->>Handler: update locked Resource snapshot
+    Handler->>Handler: materialize ResourceStateTransitionedResult
+    Handler->>UOW: commit()
+    Handler->>UOW: __exit__()
+    Handler-->>Caller: ResourceStateTransitionedResult
+```
 
 ## Application Error Policy
 
@@ -440,7 +507,7 @@ Application code raises application-facing errors:
 - `TenantBoundaryError`
 - `PersistenceError`
 
-Future SQLAlchemy persistence implementations translate storage failures at the boundary. Translation should rely on stable information such as SQLSTATE, PostgreSQL constraint names, driver exception types, and SQLAlchemy optimistic concurrency exception types. Application code must not parse human-readable PostgreSQL error messages. The current Unit of Work deliberately preserves original SQLAlchemy/database exceptions; the translation matrix belongs to `03.1.4`.
+Future SQLAlchemy persistence implementations translate storage failures at the boundary. Translation should rely on stable information such as SQLSTATE, PostgreSQL constraint names, driver exception types, and SQLAlchemy optimistic concurrency exception types. Application code must not parse human-readable PostgreSQL error messages. The current Unit of Work deliberately preserves original SQLAlchemy/database exceptions; the translation matrix remains deferred.
 
 ## Relationship-Loading Rules
 
@@ -450,7 +517,7 @@ Critical query paths should later include query-count or SQL-shape tests. `SELEC
 
 The shared loading helper only applies explicit SQLAlchemy loader options chosen by a concrete repository. It does not implement blanket eager loading, an include/expand framework, or global relationship-loading mutation. The locking helper only wraps a prepared statement with `with_for_update()` when a concrete repository asks for pessimistic locking; normal reads are not locked automatically, and no advisory locks, retry loops, deadlock handling, or lock timeout policy are introduced here.
 
-`Resource` is currently the only mapped entity with SQLAlchemy optimistic concurrency enabled through `record_version` and `version_id_col`. Shared repository infrastructure preserves SQLAlchemy's normal version-check behavior and does not catch `StaleDataError`, translate it, disable version checks, or define a generic version-column convention for all models. Broader persistence error translation remains deferred to `03.1.4`.
+`Resource` is currently the only mapped entity with SQLAlchemy optimistic concurrency enabled through `record_version` and `version_id_col`. Shared repository infrastructure preserves SQLAlchemy's normal version-check behavior and does not catch `StaleDataError`, translate it, disable version checks, or define a generic version-column convention for all models. Broader persistence error translation remains deferred.
 
 ## Write/Read Separation
 
@@ -482,6 +549,8 @@ Application service architecture tests verify immutable commands, immutable quer
 
 Resource creation command tests verify the frozen command contract, immutable entity-free result, deterministic input validation before Unit of Work creation, tenant validation, managed catalog existence and active-state validation, tenant-scoped canonical-name conflict behavior, exact add and commit ordering, no flush, failure propagation and cleanup, PostgreSQL persistence, read-back through resource query handlers, cross-tenant canonical-name behavior, same-tenant duplicate pre-check behavior, and no partial resource rows after validation failures.
 
+Resource state transition command tests verify the frozen command contract, immutable entity-free result, deterministic input validation before Unit of Work creation, resource lock ordering, tenant-safe misses, managed catalog existence and active-state validation, first-state creation, existing-current closure, replacement construction, resource snapshot updates, strict timestamp validation, no-op rejection, exact add and commit ordering, no flush, failure propagation, fresh Unit of Work behavior after failure, PostgreSQL persistence, read-back through resource query handlers, history preservation, wrong-tenant isolation, validation rollback, database constraint rollback, and the stable concurrency contract that the resource row is locked before current state is read.
+
 Future repository implementation issues must add integration tests proving tenant isolation, transaction behavior, no repository-level commits, error translation, relationship loading behavior, and query shape for critical paths.
 
 ## Accepted Trade-Offs
@@ -490,7 +559,7 @@ The project remains synchronous because the current engine, sessions, tests, and
 
 ## Deferred Concerns
 
-Deferred work includes Label SQLAlchemy repository implementations; resource update commands; temporal fact creation and replacement services; automatic state, identifier, ownership, classification, label, alias, relationship, and merge workflows; lineage services; lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; persistence error translation matrix; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
+Deferred work includes Label SQLAlchemy repository implementations; resource update commands; temporal fact creation and replacement services beyond resource state; automatic identifier, ownership, classification, label, alias, relationship, and merge workflows; lineage services; broader lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; persistence error translation matrix; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; deterministic multi-session lock timing tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
 
 ## Implementation Roadmap
 
@@ -505,7 +574,8 @@ Deferred work includes Label SQLAlchemy repository implementations; resource upd
 9. `03.1.1` — Define Application Service and Command Architecture
 10. `03.1.2` — Implement Resource Read Application Queries
 11. `03.1.3` — Implement Resource Creation Application Command
-12. `03.1.4` — Implement Persistence Error Translation
-13. `03.1.5` — Implement Query Services and Pagination
-14. `03.1.6` — Harden Persistence Integration Tests
-15. `03.1.7` — Audit Application Core and Persistence Architecture
+12. `03.1.4` — Implement Resource State Transition Command
+13. `03.1.5` — Implement Persistence Error Translation
+14. `03.1.6` — Implement Query Services and Pagination
+15. `03.1.7` — Harden Persistence Integration Tests
+16. `03.1.8` — Audit Application Core and Persistence Architecture

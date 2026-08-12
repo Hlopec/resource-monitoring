@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from app.application.commands import CreateResourceCommand, EnsureResourceExistsCommand
+from app.application.commands import (
+    CreateResourceCommand,
+    EnsureResourceExistsCommand,
+    TransitionResourceStateCommand,
+)
 from app.application.errors import (
     ConflictError,
     EntityNotFoundError,
@@ -27,9 +31,10 @@ from app.application.results import (
     ResourceMergeResult,
     ResourceOwnershipResult,
     ResourceReadResult,
+    ResourceStateTransitionedResult,
     ResourceStateResult,
 )
-from app.models import Resource
+from app.models import Resource, ResourceState
 
 INITIAL_RESOURCE_RECORD_VERSION = 1
 
@@ -191,6 +196,86 @@ class CreateResourceHandler:
             return result
 
 
+class TransitionResourceStateHandler:
+    """Command handler for replacing one resource's current state row."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def handle(
+        self,
+        command: TransitionResourceStateCommand,
+    ) -> ResourceStateTransitionedResult:
+        """Transition resource state history and commit once."""
+        _validate_transition_resource_state_command(command)
+        with self._uow_factory() as uow:
+            resource = uow.resources.get_for_update(
+                command.tenant_id,
+                command.resource_id,
+            )
+            if resource is None:
+                raise EntityNotFoundError(
+                    "Resource not found",
+                    entity_type="Resource",
+                    lookup_field="resource_id",
+                    lookup_value=command.resource_id,
+                )
+            _require_active_catalog(
+                uow.lifecycle_statuses,
+                command.lifecycle_status_id,
+                entity_type="LifecycleStatus",
+                lookup_field="lifecycle_status_id",
+            )
+            _require_active_catalog(
+                uow.criticalities,
+                command.criticality_id,
+                entity_type="Criticality",
+                lookup_field="criticality_id",
+            )
+            _require_active_catalog(
+                uow.exposure_levels,
+                command.exposure_level_id,
+                entity_type="ExposureLevel",
+                lookup_field="exposure_level_id",
+            )
+            current_state = uow.resource_states.get_current(
+                command.tenant_id,
+                command.resource_id,
+            )
+            if current_state is not None:
+                _validate_existing_state_transition(command, current_state)
+                current_state.valid_to = command.transitioned_at
+
+            new_state = ResourceState(
+                tenant_id=command.tenant_id,
+                resource_id=command.resource_id,
+                lifecycle_status_id=command.lifecycle_status_id,
+                criticality_id=command.criticality_id,
+                exposure_level_id=command.exposure_level_id,
+                source_priority=command.source_priority,
+                confidence_score=command.confidence_score,
+                valid_from=command.transitioned_at,
+                valid_to=None,
+                source=command.source,
+            )
+            resource.lifecycle_status_id = command.lifecycle_status_id
+            resource.criticality_id = command.criticality_id
+            resource.exposure_level_id = command.exposure_level_id
+            resource.source_priority = command.source_priority
+            resource.confidence_score = command.confidence_score
+            uow.resource_states.add(new_state)
+            result = ResourceStateTransitionedResult(
+                resource_id=command.resource_id,
+                previous_state_id=(
+                    current_state.id if current_state is not None else None
+                ),
+                new_state_id=new_state.id,
+                transitioned_at=command.transitioned_at,
+            )
+            uow.commit()
+            return result
+
+
 def _validate_create_resource_command(command: CreateResourceCommand) -> None:
     failures: list[ValidationFailure] = []
     if command.canonical_name.strip() == "":
@@ -234,6 +319,65 @@ def _validate_create_resource_command(command: CreateResourceCommand) -> None:
         raise ValidationError(
             "Invalid resource creation command",
             failures=tuple(failures),
+        )
+
+
+def _validate_transition_resource_state_command(
+    command: TransitionResourceStateCommand,
+) -> None:
+    failures: list[ValidationFailure] = []
+    if command.source_priority < 0 or command.source_priority > 1000:
+        failures.append(
+            ValidationFailure("source_priority", "must be between 0 and 1000")
+        )
+    if command.confidence_score < Decimal("0") or command.confidence_score > Decimal(
+        "1"
+    ):
+        failures.append(
+            ValidationFailure("confidence_score", "must be between 0 and 1")
+        )
+    transitioned_at_is_aware = (
+        command.transitioned_at.tzinfo is not None
+        and command.transitioned_at.utcoffset() is not None
+    )
+    if not transitioned_at_is_aware:
+        failures.append(ValidationFailure("transitioned_at", "must be timezone-aware"))
+    if command.source is not None and command.source.strip() == "":
+        failures.append(ValidationFailure("source", "must not be blank when provided"))
+    if failures:
+        raise ValidationError(
+            "Invalid resource state transition command",
+            failures=tuple(failures),
+        )
+
+
+def _validate_existing_state_transition(
+    command: TransitionResourceStateCommand,
+    current_state: ResourceState,
+) -> None:
+    if command.transitioned_at <= current_state.valid_from:
+        raise ValidationError(
+            "Invalid resource state transition command",
+            failures=(
+                ValidationFailure(
+                    "transitioned_at",
+                    "must be later than the current state's valid_from",
+                ),
+            ),
+        )
+    if (
+        command.lifecycle_status_id == current_state.lifecycle_status_id
+        and command.criticality_id == current_state.criticality_id
+        and command.exposure_level_id == current_state.exposure_level_id
+        and command.source_priority == current_state.source_priority
+        and command.confidence_score == current_state.confidence_score
+        and command.source == current_state.source
+    ):
+        raise ConflictError(
+            "Resource state is unchanged",
+            entity_type="ResourceState",
+            conflict_field="state",
+            conflict_value=command.resource_id,
         )
 
 

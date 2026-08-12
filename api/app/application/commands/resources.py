@@ -31,3 +31,18 @@ class EnsureResourceExistsCommand:
 
     tenant_id: UUID
     resource_id: UUID
+
+
+@dataclass(frozen=True)
+class TransitionResourceStateCommand:
+    """Command to replace the current state row for one resource."""
+
+    tenant_id: UUID
+    resource_id: UUID
+    lifecycle_status_id: UUID
+    criticality_id: UUID
+    exposure_level_id: UUID
+    source_priority: int
+    confidence_score: Decimal
+    transitioned_at: datetime
+    source: str | None
