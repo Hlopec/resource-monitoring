@@ -13,6 +13,7 @@ from app.application.commands import (
     AssignResourceRelationshipCommand,
     CreateResourceCommand,
     EnsureResourceExistsCommand,
+    MergeResourceCommand,
     TransitionResourceStateCommand,
 )
 from app.application.errors import (
@@ -39,6 +40,7 @@ from app.application.results import (
     ResourceLabelAssignedResult,
     ResourceLabelResult,
     ResourceMergeResult,
+    ResourceMergedResult,
     ResourceOwnershipAssignedResult,
     ResourceOwnershipResult,
     ResourceReadResult,
@@ -52,6 +54,7 @@ from app.models import (
     ResourceClassification,
     ResourceIdentifier,
     ResourceLabel,
+    ResourceMerge,
     ResourceOwnership,
     ResourceRelationship,
     ResourceState,
@@ -628,6 +631,69 @@ class AssignResourceAliasHandler:
             return result
 
 
+class MergeResourceHandler:
+    """Command handler for recording one merge lineage edge."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def handle(self, command: MergeResourceCommand) -> ResourceMergedResult:
+        """Record one source-to-target merge edge, commit once, and return a result."""
+        _validate_merge_resource_command(command)
+        with self._uow_factory() as uow:
+            for resource_id in sorted(
+                (command.source_resource_id, command.target_resource_id),
+                key=str,
+            ):
+                resource = uow.resources.get_for_update(command.tenant_id, resource_id)
+                if resource is None:
+                    if resource_id == command.source_resource_id:
+                        raise EntityNotFoundError(
+                            "Resource not found",
+                            entity_type="Resource",
+                            lookup_field="source_resource_id",
+                            lookup_value=command.source_resource_id,
+                        )
+                    raise EntityNotFoundError(
+                        "Resource not found",
+                        entity_type="Resource",
+                        lookup_field="target_resource_id",
+                        lookup_value=command.target_resource_id,
+                    )
+
+            existing_merge = uow.resource_merges.get_outgoing_merge(
+                command.tenant_id,
+                command.source_resource_id,
+            )
+            if existing_merge is not None:
+                raise ConflictError(
+                    "Resource is already merged",
+                    entity_type="ResourceMerge",
+                    conflict_field="source_resource_id",
+                    conflict_value=command.source_resource_id,
+                )
+
+            merge = ResourceMerge(
+                tenant_id=command.tenant_id,
+                source_resource_id=command.source_resource_id,
+                target_resource_id=command.target_resource_id,
+                reason=command.reason,
+                source=command.source,
+                merged_at=command.merged_at,
+            )
+            uow.resource_merges.add(merge)
+            result = ResourceMergedResult(
+                merge_id=merge.id,
+                source_resource_id=command.source_resource_id,
+                target_resource_id=command.target_resource_id,
+                merged_at=command.merged_at,
+                reason=command.reason,
+                source=command.source,
+            )
+            uow.commit()
+            return result
+
+
 class AssignResourceClassificationHandler:
     """Command handler for assigning one current classification to a resource."""
 
@@ -966,6 +1032,32 @@ def _validate_assign_resource_alias_command(
     if failures:
         raise ValidationError(
             "Invalid resource alias assignment command",
+            failures=tuple(failures),
+        )
+
+
+def _validate_merge_resource_command(command: MergeResourceCommand) -> None:
+    failures: list[ValidationFailure] = []
+    if command.source_resource_id == command.target_resource_id:
+        failures.append(
+            ValidationFailure(
+                "target_resource_id",
+                "must differ from source_resource_id",
+            )
+        )
+    merged_at_is_aware = (
+        command.merged_at.tzinfo is not None
+        and command.merged_at.utcoffset() is not None
+    )
+    if not merged_at_is_aware:
+        failures.append(ValidationFailure("merged_at", "must be timezone-aware"))
+    if command.reason is not None and command.reason.strip() == "":
+        failures.append(ValidationFailure("reason", "must not be blank when provided"))
+    if command.source is not None and command.source.strip() == "":
+        failures.append(ValidationFailure("source", "must not be blank when provided"))
+    if failures:
+        raise ValidationError(
+            "Invalid resource merge command",
             failures=tuple(failures),
         )
 

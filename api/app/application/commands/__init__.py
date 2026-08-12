@@ -9,6 +9,7 @@ from app.application.commands.resources import (
     AssignResourceRelationshipCommand,
     CreateResourceCommand,
     EnsureResourceExistsCommand,
+    MergeResourceCommand,
     TransitionResourceStateCommand,
 )
 
@@ -21,5 +22,6 @@ __all__ = [
     "AssignResourceRelationshipCommand",
     "CreateResourceCommand",
     "EnsureResourceExistsCommand",
+    "MergeResourceCommand",
     "TransitionResourceStateCommand",
 ]

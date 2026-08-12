@@ -520,6 +520,49 @@ sequenceDiagram
     Handler-->>Caller: ResourceAliasAssignedResult
 ```
 
+## Resource Merge Execution Command
+
+`MergeResourceHandler` records one immutable `ResourceMerge` lineage edge from `source_resource_id` to `target_resource_id`. This use case is lineage-only: it does not migrate aliases, identifiers, ownerships, classifications, labels, relationships, state, or other resource facts; it does not archive, deactivate, delete, or rewrite either resource; and it does not resolve canonical resources.
+
+`MergeResourceCommand` is an immutable transport-neutral dataclass with the actual fields required by the current `ResourceMerge` model: `tenant_id`, `source_resource_id`, `target_resource_id`, nullable `reason`, nullable `source`, and `merged_at`. `ResourceMergedResult` is fully materialized before commit and contains `merge_id`, `source_resource_id`, `target_resource_id`, `merged_at`, `reason`, and `source`.
+
+Validation starts before a Unit of Work is created. The handler rejects command-only failures with `ValidationError("Invalid resource merge command", failures=(...))`: source and target must differ, `merged_at` must be timezone-aware, and nullable `reason` and `source` must not be blank when present. Direct self-merge is rejected in the application before PostgreSQL sees the row.
+
+After command-only validation, the handler opens one fresh Unit of Work and locks both endpoint resources through `uow.resources.get_for_update(tenant_id, resource_id)`. Locks are acquired in stable UUID string order to prevent opposite-direction lock-order deadlock patterns. Physical lock order does not change source -> target merge direction: the persisted row always uses the command's source as `source_resource_id` and the command's target as `target_resource_id`. Missing and wrong-tenant endpoints raise `EntityNotFoundError("Resource not found", entity_type="Resource", lookup_field="source_resource_id" | "target_resource_id", lookup_value=...)` by semantic endpoint role, not physical lock order.
+
+The source resource may have at most one outgoing merge. The handler checks `uow.resource_merges.get_outgoing_merge(tenant_id, source_resource_id)` and raises `ConflictError("Resource is already merged", entity_type="ResourceMerge", conflict_field="source_resource_id", conflict_value=source_resource_id)` before mutation when one exists. The target may already have its own outgoing merge. For example, `B -> C` followed by `A -> B` is valid and records the immediate requested target, producing `A -> B -> C`; the command does not rewrite `A -> C` or resolve the terminal canonical resource.
+
+PostgreSQL remains authoritative for indirect cycle prevention through `prevent_resource_merge_cycle()` and `trg_resource_merge_prevent_cycle`. The application rejects direct self-merge, but it does not add recursive traversal, canonical resolution, path compression, or trigger-message parsing. Cycle-trigger failures that are not covered by the current persistence translator intentionally propagate as the original database error.
+
+On success, the handler constructs exactly one `ResourceMerge`, adds it through `uow.resource_merges.add(...)`, materializes `ResourceMergedResult`, and calls `uow.commit()` exactly once as the final meaningful operation. It does not call `flush()` because merge ids are Python-generated and no server-generated fields are needed for the result. Commit-time persistence translation remains available for duplicate-source races through `uq_resource_merge_tenant_source_resource_id`.
+
+Successful merge execution flow:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Handler as MergeResourceHandler
+    participant Factory as UnitOfWorkFactory
+    participant UOW as UnitOfWork
+    participant ResourceRepo as ResourceRepository
+    participant MergeRepo as ResourceMergeRepository
+
+    Caller->>Handler: handle(MergeResourceCommand)
+    Handler->>Handler: validate command values
+    Handler->>Factory: __call__()
+    Factory-->>Handler: fresh UnitOfWork
+    Handler->>UOW: __enter__()
+    Handler->>ResourceRepo: get_for_update(tenant_id, lower_endpoint_id)
+    Handler->>ResourceRepo: get_for_update(tenant_id, higher_endpoint_id)
+    Handler->>MergeRepo: get_outgoing_merge(tenant_id, source_resource_id)
+    Handler->>Handler: construct ResourceMerge
+    Handler->>MergeRepo: add(merge)
+    Handler->>Handler: materialize ResourceMergedResult
+    Handler->>UOW: commit()
+    Handler->>UOW: __exit__()
+    Handler-->>Caller: ResourceMergedResult
+```
+
 ## Resource Classification Assignment Command
 
 `AssignResourceClassificationHandler` appends one current `ResourceClassification` fact for an existing resource. This use case is assignment only: it does not replace classifications, expire classifications, transfer classifications, demote existing primary classifications, close current rows, delete history, create catalog rows, add API schemas, or introduce a generic temporal mutation abstraction.
@@ -744,6 +787,8 @@ with SQLAlchemyUnitOfWork() as uow:
 
 Alias assignment uses the same direct alias lookup contract to reject duplicates and collisions before insert. It does not add canonical merge traversal or alias transfer behavior.
 
+Merge execution uses only direct outgoing merge lookup and incoming merge read-back. It records immediate requested lineage edges and does not add recursive canonical traversal.
+
 ## Transaction Ownership
 
 One application command or use case normally owns one Unit of Work. Application handlers obtain that Unit of Work by calling an injected `UnitOfWorkFactory`. Application services decide whether the operation succeeds. Repositories never commit and helper functions must not hide commits. External network calls should not normally run inside an open database transaction.
@@ -874,7 +919,7 @@ The project remains synchronous because the current engine, sessions, tests, and
 
 ## Deferred Concerns
 
-Deferred work includes resource update commands; identifier replacement, expiration, removal, reassignment, and primary-demotion workflows; ownership replacement, expiration, removal, transfer, and primary-demotion workflows; relationship replacement, expiration, removal, inverse-edge handling, endpoint type-constraint policy, graph traversal, and transitive expansion workflows; classification replacement, expiration, removal, transfer, and primary-demotion workflows; alias normalization, alias re-observation/update, alias deletion, alias transfer, canonical resolution, and Resource Merge execution workflows; temporal fact creation and replacement services beyond resource state, identifier assignment, ownership assignment, relationship assignment, classification assignment, and label assignment; automatic label, alias, relationship, and merge workflows; lineage services; broader lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; expanded persistence error translation mappings as new named constraints become use-case relevant; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; deterministic multi-session lock timing tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
+Deferred work includes resource update commands; identifier replacement, expiration, removal, reassignment, and primary-demotion workflows; ownership replacement, expiration, removal, transfer, and primary-demotion workflows; relationship replacement, expiration, removal, inverse-edge handling, endpoint type-constraint policy, graph traversal, and transitive expansion workflows; classification replacement, expiration, removal, transfer, and primary-demotion workflows; alias normalization, alias re-observation/update, alias deletion, alias transfer, ResolveCanonicalResourceQuery, recursive canonical traversal, fact migration and consolidation policy, relationship rewiring, source archival, and unmerge workflows; temporal fact creation and replacement services beyond resource state, identifier assignment, ownership assignment, relationship assignment, classification assignment, and label assignment; automatic label, alias, relationship, and merge workflows; lineage services; broader lifecycle command handlers; transport wiring; dependency-injection wiring; additional use-case services; broader DTO/result types; expanded persistence error translation mappings as new named constraints become use-case relevant; query services; pagination; merge execution; canonical traversal; alias transfer policy; query-count tests; deterministic multi-session lock timing tests; retry policy; external transaction orchestration; and any future decision to introduce pure domain entities. Command buses, mediators, handler registries, middleware, decorators, and automatic discovery remain out of scope until a real repeated need appears.
 
 ## Implementation Roadmap
 
