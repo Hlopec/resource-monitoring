@@ -640,6 +640,24 @@ def test_sqlalchemy_resource_query_service_lives_below_persistence_boundary() ->
     )
 
 
+def test_resource_query_service_surface_remains_stage_03_2_only() -> None:
+    public_method_names = {name for name, _ in _public_methods(ResourceQueryService)}
+
+    assert public_method_names == {
+        "find_by_alias",
+        "find_by_identifier",
+        "list_resources",
+    }
+    assert {
+        "filter",
+        "find_any",
+        "lookup_any_identity",
+        "paginate",
+        "query",
+        "search",
+    }.isdisjoint(public_method_names)
+
+
 def test_resource_list_contracts_expose_explicit_scalar_filters_only() -> None:
     query_hints = get_type_hints(ListResourcesQuery)
     projection_hints = get_type_hints(ResourceSummaryProjection)
@@ -686,6 +704,31 @@ def test_resource_identity_lookup_contracts_are_explicit_and_entity_free() -> No
     assert Resource not in identifier_projection_hints.values()
     assert ResourceIdentifier not in identifier_projection_hints.values()
     assert ResourceAlias not in alias_projection_hints.values()
+
+
+def test_list_resources_handler_does_not_perform_filter_existence_lookups() -> None:
+    source = inspect.getsource(ListResourcesHandler)
+
+    assert ".labels" not in source
+    assert ".classification_types" not in source
+    assert ".classification_values" not in source
+    assert ".resource_labels" not in source
+    assert ".resource_classifications" not in source
+
+
+def test_identity_lookup_handlers_do_not_auto_resolve_canonical_resource() -> None:
+    source = "\n".join(
+        (
+            inspect.getsource(FindResourceByIdentifierHandler),
+            inspect.getsource(FindResourceByAliasHandler),
+        )
+    )
+
+    assert "ResolveCanonicalResource" not in source
+    assert "ResolveCanonicalResourceHandler" not in source
+    assert "resource_merges" not in source
+    assert "get_outgoing_merge" not in source
+    assert "canonical_resource_id" not in source
 
 
 def test_multi_resource_handlers_share_deterministic_lock_order_helper() -> None:
