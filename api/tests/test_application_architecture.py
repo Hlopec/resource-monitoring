@@ -640,18 +640,25 @@ def test_sqlalchemy_resource_query_service_lives_below_persistence_boundary() ->
     )
 
 
-def test_resource_list_contracts_expose_scalar_ownership_fields_only() -> None:
+def test_resource_list_contracts_expose_explicit_scalar_filters_only() -> None:
     query_hints = get_type_hints(ListResourcesQuery)
     projection_hints = get_type_hints(ResourceSummaryProjection)
     result_hints = get_type_hints(ResourceSummaryResult)
 
     assert query_hints["organization_id"] == UUID | None
+    assert query_hints["label_id"] == UUID | None
+    assert query_hints["classification_type_id"] == UUID | None
+    assert query_hints["classification_value_id"] == UUID | None
     assert projection_hints["primary_organization_id"] == UUID | None
     assert projection_hints["primary_ownership_role_id"] == UUID | None
     assert result_hints["primary_organization_id"] == UUID | None
     assert result_hints["primary_ownership_role_id"] == UUID | None
     assert ResourceOwnership not in projection_hints.values()
+    assert ResourceLabel not in projection_hints.values()
+    assert ResourceClassification not in projection_hints.values()
     assert ResourceOwnership not in result_hints.values()
+    assert ResourceLabel not in result_hints.values()
+    assert ResourceClassification not in result_hints.values()
 
 
 def test_resource_identity_lookup_contracts_are_explicit_and_entity_free() -> None:
@@ -747,6 +754,9 @@ def test_repository_protocols_define_expected_signatures() -> None:
     assert query_hints["resource_type_id"] == UUID | None
     assert query_hints["lifecycle_status_id"] == UUID | None
     assert query_hints["organization_id"] == UUID | None
+    assert query_hints["label_id"] == UUID | None
+    assert query_hints["classification_type_id"] == UUID | None
+    assert query_hints["classification_value_id"] == UUID | None
     assert query_hints["return"] is ResourceQueryPage
 
     identifier_lookup_hints = get_type_hints(ResourceQueryService.find_by_identifier)

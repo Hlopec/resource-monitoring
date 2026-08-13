@@ -99,6 +99,9 @@ class ResourceQueryService(Protocol):
         resource_type_id: UUID | None,
         lifecycle_status_id: UUID | None,
         organization_id: UUID | None,
+        label_id: UUID | None,
+        classification_type_id: UUID | None,
+        classification_value_id: UUID | None,
         after: ResourceListCursor | None,
         limit: int,
     ) -> ResourceQueryPage:

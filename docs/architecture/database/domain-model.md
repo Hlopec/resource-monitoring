@@ -40,6 +40,8 @@ The resource table does not carry `valid_from` and `valid_to` because those are 
 
 The first Resource collection query orders Resource rows by `created_at ASC, id ASC` and uses keyset pagination over that tuple. Existing indexes support tenant plus type and tenant plus lifecycle-status filters, but the schema does not yet define a composite `(tenant_id, created_at, id)` index for the default list order. Query correctness does not depend on the composite index; it is a deferred scaling migration for high-volume collection reads.
 
+Resource collection filters are exact and current-state oriented. Optional filters combine with `AND`: resource type, lifecycle status, current primary owner organization, current tenant-scoped label assignment, and current classification. Label filtering uses `resource_label.valid_to IS NULL` and the row tenant; historical label assignments do not match. Classification filtering uses `resource_classification.valid_to IS NULL`; a type-only filter matches any current row for the type, while a type/value filter matches the exact pair. Current non-primary classification rows are eligible. A classification value without a classification type is rejected by application validation. Cursor version `1` remains based only on `created_at` and resource id.
+
 ### Resource identifier
 
 Resource identifier stores a specific identifier value for a resource, using an identifier type and a normalized representation. Each assignment remains temporally versioned so that the identity evidence can be audited and superseded when required.
@@ -82,6 +84,8 @@ The implemented `resource_classification` table stores tenant-owned temporal ass
 
 A current classification row has `valid_to IS NULL`; historical rows keep their validity window. Changing a classification value, confidence score, source, or primary designation should close the old row and insert a new temporal fact. Current duplicate value assignments are unique per `tenant_id`, `resource_id`, and `classification_value_id`, while historical reuse remains allowed. Multiple current non-primary values of the same type are allowed, but only one current primary row is allowed per `tenant_id`, `resource_id`, and `classification_type_id`. Referenced resources, classification values, and classification types use restrictive deletes.
 
+Resource list classification filtering reads these assignment facts with tenant-scoped current-row predicates. It does not require `is_primary`, does not infer type from value, and does not query catalog display names or codes.
+
 ### Label and resource label
 
 Labels provide tenant-scoped, free-form operational annotations without changing canonical identity. They differ from controlled classifications: classifications use global managed catalogs and type/value governance, while labels are tenant-owned key/value definitions for local workflow, grouping, and annotation.
@@ -89,6 +93,8 @@ Labels provide tenant-scoped, free-form operational annotations without changing
 The implemented `label` table is tenant-owned and uses canonical `key` plus case-sensitive `value`. Label keys must be trimmed, lowercase, and non-empty. Label values must be trimmed and non-empty, but value case is preserved so `Production` and `production` are different values. A tenant can define each canonical `(key, value)` only once, regardless of `is_active`; deactivation preserves the definition for existing assignments instead of allowing duplicate recreation. Optional `display_name`, `description`, and `color` metadata do not participate in identity. Color is optional and, when present, must use `#RRGGBB` hex format.
 
 `resource_label` stores tenant-owned temporal assignment facts between a resource and a label. It uses tenant-safe composite foreign keys to both `resource(tenant_id, id)` and `label(tenant_id, id)`, so PostgreSQL rejects cross-tenant resource/label assignments. A current assignment row has `valid_to IS NULL`; historical rows keep their validity window. Duplicate current assignment of the same label to the same resource is rejected, while historical reuse, multiple labels on one resource, the same label on different resources, and multiple values for the same key are allowed. Referenced tenants, resources, and labels use restrictive deletes.
+
+Resource list label filtering reads current `resource_label` rows by exact `label_id` and tenant. It does not query label key/value text, and a label id from another tenant simply produces no matching rows for the requested tenant.
 
 ### Resource state
 
