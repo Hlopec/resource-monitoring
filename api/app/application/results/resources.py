@@ -126,6 +126,8 @@ class ResourceSummaryResult:
     lifecycle_status_id: UUID
     canonical_name: str
     display_name: str | None
+    primary_organization_id: UUID | None
+    primary_ownership_role_id: UUID | None
     record_version: int
     first_seen_at: datetime
     last_seen_at: datetime

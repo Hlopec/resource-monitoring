@@ -49,5 +49,6 @@ class ListResourcesQuery:
     tenant_id: UUID
     resource_type_id: UUID | None = None
     lifecycle_status_id: UUID | None = None
+    organization_id: UUID | None = None
     page_size: int = DEFAULT_RESOURCE_PAGE_SIZE
     cursor: str | None = None

@@ -57,6 +57,8 @@ from app.application.ports.resource_queries import (
     ResourceQueryService,
     ResourceSummaryProjection,
 )
+from app.application.queries import ListResourcesQuery
+from app.application.results import ResourceSummaryResult
 from app.application.ports.temporal import (
     ResourceClassificationRepository,
     ResourceIdentifierRepository,
@@ -624,6 +626,20 @@ def test_sqlalchemy_resource_query_service_lives_below_persistence_boundary() ->
     )
 
 
+def test_resource_list_contracts_expose_scalar_ownership_fields_only() -> None:
+    query_hints = get_type_hints(ListResourcesQuery)
+    projection_hints = get_type_hints(ResourceSummaryProjection)
+    result_hints = get_type_hints(ResourceSummaryResult)
+
+    assert query_hints["organization_id"] == UUID | None
+    assert projection_hints["primary_organization_id"] == UUID | None
+    assert projection_hints["primary_ownership_role_id"] == UUID | None
+    assert result_hints["primary_organization_id"] == UUID | None
+    assert result_hints["primary_ownership_role_id"] == UUID | None
+    assert ResourceOwnership not in projection_hints.values()
+    assert ResourceOwnership not in result_hints.values()
+
+
 def test_multi_resource_handlers_share_deterministic_lock_order_helper() -> None:
     relationship_source = inspect.getsource(AssignResourceRelationshipHandler)
     merge_source = inspect.getsource(MergeResourceHandler)
@@ -687,6 +703,9 @@ def test_repository_protocols_define_expected_signatures() -> None:
 
     query_hints = get_type_hints(ResourceQueryService.list_resources)
     assert query_hints["tenant_id"] is UUID
+    assert query_hints["resource_type_id"] == UUID | None
+    assert query_hints["lifecycle_status_id"] == UUID | None
+    assert query_hints["organization_id"] == UUID | None
     assert query_hints["return"] is ResourceQueryPage
 
     mutation_methods = (
