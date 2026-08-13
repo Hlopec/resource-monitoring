@@ -38,8 +38,59 @@ class ResourceQueryPage:
     next_position: ResourceListCursor | None
 
 
+@dataclass(frozen=True)
+class ResourceIdentifierLookupProjection:
+    """Technology-neutral row for an exact current identifier lookup."""
+
+    resource_id: UUID
+    tenant_id: UUID
+    canonical_name: str
+    display_name: str | None
+    identifier_id: UUID
+    identifier_type_id: UUID
+    namespace: str | None
+    normalized_value: str
+    original_value: str
+    is_primary: bool
+
+
+@dataclass(frozen=True)
+class ResourceAliasLookupProjection:
+    """Technology-neutral row for an exact alias lookup."""
+
+    resource_id: UUID
+    tenant_id: UUID
+    canonical_name: str
+    display_name: str | None
+    alias_id: UUID
+    alias_type: str
+    normalized_value: str
+    alias_value: str
+
+
 class ResourceQueryService(Protocol):
     """Tenant-scoped read service for Resource collection projections."""
+
+    def find_by_identifier(
+        self,
+        tenant_id: UUID,
+        *,
+        identifier_type_id: UUID,
+        namespace: str | None,
+        normalized_value: str,
+    ) -> ResourceIdentifierLookupProjection | None:
+        """Return one Resource projection by exact current identifier."""
+        ...
+
+    def find_by_alias(
+        self,
+        tenant_id: UUID,
+        *,
+        alias_type: str,
+        normalized_value: str,
+    ) -> ResourceAliasLookupProjection | None:
+        """Return one Resource projection by exact alias."""
+        ...
 
     def list_resources(
         self,

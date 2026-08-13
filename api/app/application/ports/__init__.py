@@ -16,6 +16,8 @@ from app.application.ports.repositories import (
 )
 from app.application.ports.resources import ResourceRepository
 from app.application.ports.resource_queries import (
+    ResourceAliasLookupProjection,
+    ResourceIdentifierLookupProjection,
     ResourceQueryPage,
     ResourceQueryService,
     ResourceSummaryProjection,
@@ -43,6 +45,8 @@ __all__ = [
     "ResourceLabelRepository",
     "ResourceMergeRepository",
     "ResourceOwnershipRepository",
+    "ResourceAliasLookupProjection",
+    "ResourceIdentifierLookupProjection",
     "ResourceQueryPage",
     "ResourceQueryService",
     "ResourceRelationshipRepository",

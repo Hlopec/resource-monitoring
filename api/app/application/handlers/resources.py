@@ -29,6 +29,8 @@ from app.application.pagination import (
 )
 from app.application.ports import UnitOfWork, UnitOfWorkFactory
 from app.application.queries import (
+    FindResourceByAliasQuery,
+    FindResourceByIdentifierQuery,
     GetResourceByCanonicalNameQuery,
     GetResourceByIdQuery,
     GetResourceDetailsQuery,
@@ -40,9 +42,11 @@ from app.application.queries import (
 from app.application.results import (
     CanonicalResourceResolvedResult,
     ResourceAliasAssignedResult,
+    ResourceAliasLookupResult,
     ResourceAliasResult,
     ResourceClassificationAssignedResult,
     ResourceIdentifierAssignedResult,
+    ResourceIdentifierLookupResult,
     ResourceClassificationResult,
     ResourceCreatedResult,
     ResourceDetailsResult,
@@ -122,6 +126,88 @@ class ListResourcesHandler:
                 items=items,
                 next_cursor=next_cursor,
                 page_size=query.page_size,
+            )
+
+
+class FindResourceByIdentifierHandler:
+    """Read-only handler for exact current ResourceIdentifier lookup."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def handle(
+        self,
+        query: FindResourceByIdentifierQuery,
+    ) -> ResourceIdentifierLookupResult:
+        """Return the Resource directly referenced by an exact current identifier."""
+        _validate_find_resource_by_identifier_query(query)
+        with self._uow_factory() as uow:
+            projection = uow.resource_queries.find_by_identifier(
+                query.tenant_id,
+                identifier_type_id=query.identifier_type_id,
+                namespace=query.namespace,
+                normalized_value=query.normalized_value,
+            )
+            if projection is None:
+                raise EntityNotFoundError(
+                    "Resource identifier not found",
+                    entity_type="ResourceIdentifier",
+                    lookup_field="identifier",
+                    lookup_value=(
+                        query.identifier_type_id,
+                        query.namespace,
+                        query.normalized_value,
+                    ),
+                )
+            return ResourceIdentifierLookupResult(
+                resource=ResourceReadResult(
+                    id=projection.resource_id,
+                    tenant_id=projection.tenant_id,
+                    canonical_name=projection.canonical_name,
+                    display_name=projection.display_name,
+                ),
+                identifier_id=projection.identifier_id,
+                identifier_type_id=projection.identifier_type_id,
+                namespace=projection.namespace,
+                normalized_value=projection.normalized_value,
+                original_value=projection.original_value,
+                is_primary=projection.is_primary,
+            )
+
+
+class FindResourceByAliasHandler:
+    """Read-only handler for exact ResourceAlias lookup."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def handle(self, query: FindResourceByAliasQuery) -> ResourceAliasLookupResult:
+        """Return the Resource directly referenced by an exact alias."""
+        _validate_find_resource_by_alias_query(query)
+        with self._uow_factory() as uow:
+            projection = uow.resource_queries.find_by_alias(
+                query.tenant_id,
+                alias_type=query.alias_type,
+                normalized_value=query.normalized_value,
+            )
+            if projection is None:
+                raise EntityNotFoundError(
+                    "Resource alias not found",
+                    entity_type="ResourceAlias",
+                    lookup_field="alias",
+                    lookup_value=(query.alias_type, query.normalized_value),
+                )
+            return ResourceAliasLookupResult(
+                resource=ResourceReadResult(
+                    id=projection.resource_id,
+                    tenant_id=projection.tenant_id,
+                    canonical_name=projection.canonical_name,
+                    display_name=projection.display_name,
+                ),
+                alias_id=projection.alias_id,
+                alias_type=projection.alias_type,
+                normalized_value=projection.normalized_value,
+                alias_value=projection.alias_value,
             )
 
 
@@ -1073,6 +1159,34 @@ def _validate_list_resources_query(query: ListResourcesQuery) -> None:
                     f"must be at most {MAX_RESOURCE_PAGE_SIZE}",
                 ),
             ),
+        )
+
+
+def _validate_find_resource_by_identifier_query(
+    query: FindResourceByIdentifierQuery,
+) -> None:
+    failures: list[ValidationFailure] = []
+    if query.normalized_value.strip() == "":
+        failures.append(ValidationFailure("normalized_value", "must not be blank"))
+    if query.namespace is not None and query.namespace.strip() == "":
+        failures.append(ValidationFailure("namespace", "must not be blank when provided"))
+    if failures:
+        raise ValidationError(
+            "Invalid resource identifier lookup query",
+            failures=tuple(failures),
+        )
+
+
+def _validate_find_resource_by_alias_query(query: FindResourceByAliasQuery) -> None:
+    failures: list[ValidationFailure] = []
+    if query.alias_type.strip() == "":
+        failures.append(ValidationFailure("alias_type", "must not be blank"))
+    if query.normalized_value.strip() == "":
+        failures.append(ValidationFailure("normalized_value", "must not be blank"))
+    if failures:
+        raise ValidationError(
+            "Invalid resource alias lookup query",
+            failures=tuple(failures),
         )
 
 

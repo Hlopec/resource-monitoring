@@ -6,20 +6,36 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+import pytest
 from sqlalchemy import Engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.application.handlers import ListResourcesHandler
+from app.application.errors import EntityNotFoundError
+from app.application.handlers import (
+    FindResourceByAliasHandler,
+    FindResourceByIdentifierHandler,
+    ListResourcesHandler,
+    ResolveCanonicalResourceHandler,
+)
 from app.application.pagination import decode_resource_list_cursor
-from app.application.queries import ListResourcesQuery
+from app.application.queries import (
+    FindResourceByAliasQuery,
+    FindResourceByIdentifierQuery,
+    ListResourcesQuery,
+    ResolveCanonicalResourceQuery,
+)
 from app.db.seed.catalogs import seed_catalogs
 from app.models import (
     Criticality,
     ExposureLevel,
+    IdentifierType,
     LifecycleStatus,
     Organization,
     OwnershipRole,
     Resource,
+    ResourceAlias,
+    ResourceIdentifier,
+    ResourceMerge,
     ResourceOwnership,
     ResourceType,
     Tenant,
@@ -166,6 +182,79 @@ def _ownership(
     session.add(ownership)
     session.flush()
     return ownership
+
+
+def _identifier_type_id(session: Session, code: str = "fqdn") -> UUID:
+    return _catalog_id(session, IdentifierType, code)
+
+
+def _identifier(
+    session: Session,
+    resource: Resource,
+    *,
+    identifier_type_id: UUID | None = None,
+    namespace: str | None = None,
+    normalized_value: str = "example.com",
+    original_value: str = "Example.COM",
+    value_hash: str = "hash-example.com",
+    is_primary: bool = False,
+    valid_from: datetime | None = None,
+    valid_to: datetime | None = None,
+) -> ResourceIdentifier:
+    identifier = ResourceIdentifier(
+        tenant_id=resource.tenant_id,
+        resource_id=resource.id,
+        identifier_type_id=identifier_type_id or _identifier_type_id(session),
+        namespace=namespace,
+        normalized_value=normalized_value,
+        original_value=original_value,
+        value_hash=value_hash,
+        is_primary=is_primary,
+        confidence_score=Decimal("0.9000"),
+        valid_from=valid_from or _now(-1),
+        valid_to=valid_to,
+    )
+    session.add(identifier)
+    session.flush()
+    return identifier
+
+
+def _alias(
+    session: Session,
+    resource: Resource,
+    *,
+    alias_type: str = "dns_name",
+    normalized_value: str = "example.com",
+    alias_value: str = "Example.COM",
+) -> ResourceAlias:
+    now = _now(-1)
+    alias = ResourceAlias(
+        tenant_id=resource.tenant_id,
+        resource_id=resource.id,
+        alias_type=alias_type,
+        alias_value=alias_value,
+        normalized_value=normalized_value,
+        source="test",
+        first_seen_at=now,
+        last_seen_at=now,
+    )
+    session.add(alias)
+    session.flush()
+    return alias
+
+
+def _merge(session: Session, source: Resource, target: Resource) -> ResourceMerge:
+    merge = ResourceMerge(
+        tenant_id=source.tenant_id,
+        source_resource_id=source.id,
+        target_resource_id=target.id,
+        reason="duplicate",
+        source="test",
+        merged_at=_now(),
+    )
+    session.add(merge)
+    session.flush()
+    return merge
 
 
 @contextmanager
@@ -706,6 +795,405 @@ def test_organization_filter_is_tenant_scoped(
 
     assert wrong_tenant_page.items == ()
     assert [item.resource_id for item in tenant_b_page.items] == [resource_b.id]
+
+
+def test_identifier_lookup_matches_exact_current_identifier(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        resource = _resource(setup, tenant_id, _slug("identifier"), created_at=_now(-5))
+        identifier = _identifier(
+            setup,
+            resource,
+            namespace="dns",
+            normalized_value="CaseSensitive-Key",
+            original_value="Example.COM",
+            is_primary=False,
+        )
+        setup.commit()
+    handler = FindResourceByIdentifierHandler(_uow_factory(SessionLocal))
+
+    result = handler.handle(
+        FindResourceByIdentifierQuery(
+            tenant_id=tenant_id,
+            identifier_type_id=identifier.identifier_type_id,
+            namespace="dns",
+            normalized_value="CaseSensitive-Key",
+        )
+    )
+
+    assert result.resource.id == resource.id
+    assert result.resource.tenant_id == tenant_id
+    assert result.identifier_id == identifier.id
+    assert result.namespace == "dns"
+    assert result.normalized_value == "CaseSensitive-Key"
+    assert result.original_value == "Example.COM"
+    assert result.is_primary is False
+
+
+def test_identifier_lookup_uses_normalized_value_not_original_value(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        resource = _resource(setup, tenant_id, _slug("original"), created_at=_now(-5))
+        identifier = _identifier(
+            setup,
+            resource,
+            normalized_value="example.com",
+            original_value="Example.COM",
+        )
+        setup.commit()
+    handler = FindResourceByIdentifierHandler(_uow_factory(SessionLocal))
+
+    matching = handler.handle(
+        FindResourceByIdentifierQuery(
+            tenant_id=tenant_id,
+            identifier_type_id=identifier.identifier_type_id,
+            namespace=None,
+            normalized_value="example.com",
+        )
+    )
+
+    assert matching.resource.id == resource.id
+    with pytest.raises(EntityNotFoundError):
+        handler.handle(
+            FindResourceByIdentifierQuery(
+                tenant_id=tenant_id,
+                identifier_type_id=identifier.identifier_type_id,
+                namespace=None,
+                normalized_value="Example.COM",
+            )
+        )
+
+
+def test_identifier_lookup_namespace_semantics_are_exact(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        identifier_type_id = _identifier_type_id(setup)
+        null_resource = _resource(setup, tenant_id, _slug("null-ns"), created_at=_now(-5))
+        dns_resource = _resource(setup, tenant_id, _slug("dns-ns"), created_at=_now(-4))
+        cloud_resource = _resource(setup, tenant_id, _slug("cloud-ns"), created_at=_now(-3))
+        null_identifier = _identifier(
+            setup,
+            null_resource,
+            identifier_type_id=identifier_type_id,
+            namespace=None,
+            normalized_value="shared.example.com",
+            value_hash="hash-null",
+        )
+        dns_identifier = _identifier(
+            setup,
+            dns_resource,
+            identifier_type_id=identifier_type_id,
+            namespace="dns",
+            normalized_value="shared.example.com",
+            value_hash="hash-dns",
+        )
+        cloud_identifier = _identifier(
+            setup,
+            cloud_resource,
+            identifier_type_id=identifier_type_id,
+            namespace="cloud",
+            normalized_value="shared.example.com",
+            value_hash="hash-cloud",
+        )
+        setup.commit()
+    handler = FindResourceByIdentifierHandler(_uow_factory(SessionLocal))
+
+    null_result = handler.handle(
+        FindResourceByIdentifierQuery(
+            tenant_id=tenant_id,
+            identifier_type_id=identifier_type_id,
+            namespace=None,
+            normalized_value="shared.example.com",
+        )
+    )
+    dns_result = handler.handle(
+        FindResourceByIdentifierQuery(
+            tenant_id=tenant_id,
+            identifier_type_id=identifier_type_id,
+            namespace="dns",
+            normalized_value="shared.example.com",
+        )
+    )
+    cloud_result = handler.handle(
+        FindResourceByIdentifierQuery(
+            tenant_id=tenant_id,
+            identifier_type_id=identifier_type_id,
+            namespace="cloud",
+            normalized_value="shared.example.com",
+        )
+    )
+
+    assert null_result.identifier_id == null_identifier.id
+    assert dns_result.identifier_id == dns_identifier.id
+    assert cloud_result.identifier_id == cloud_identifier.id
+
+
+def test_historical_identifier_is_ignored_and_current_reuse_matches(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        identifier_type_id = _identifier_type_id(setup)
+        resource_a = _resource(setup, tenant_id, _slug("old-id"), created_at=_now(-10))
+        resource_b = _resource(setup, tenant_id, _slug("new-id"), created_at=_now(-9))
+        _identifier(
+            setup,
+            resource_a,
+            identifier_type_id=identifier_type_id,
+            normalized_value="reused.example.com",
+            value_hash="hash-old",
+            valid_from=_now(-30),
+            valid_to=_now(-20),
+        )
+        current = _identifier(
+            setup,
+            resource_b,
+            identifier_type_id=identifier_type_id,
+            normalized_value="reused.example.com",
+            value_hash="hash-new",
+            valid_from=_now(-20),
+        )
+        setup.commit()
+    handler = FindResourceByIdentifierHandler(_uow_factory(SessionLocal))
+
+    result = handler.handle(
+        FindResourceByIdentifierQuery(
+            tenant_id=tenant_id,
+            identifier_type_id=identifier_type_id,
+            namespace=None,
+            normalized_value="reused.example.com",
+        )
+    )
+
+    assert result.resource.id == resource_b.id
+    assert result.identifier_id == current.id
+
+
+def test_identifier_lookup_is_tenant_scoped(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_a = _seed_tenant(setup, "tenant-a")
+        tenant_b = _seed_tenant(setup, "tenant-b")
+        identifier_type_id = _identifier_type_id(setup)
+        resource_a = _resource(setup, tenant_a, _slug("tenant-a-id"), created_at=_now(-5))
+        resource_b = _resource(setup, tenant_b, _slug("tenant-b-id"), created_at=_now(-5))
+        _identifier(
+            setup,
+            resource_a,
+            identifier_type_id=identifier_type_id,
+            normalized_value="shared.example.com",
+            value_hash="hash-a",
+        )
+        _identifier(
+            setup,
+            resource_b,
+            identifier_type_id=identifier_type_id,
+            normalized_value="shared.example.com",
+            value_hash="hash-b",
+        )
+        setup.commit()
+    handler = FindResourceByIdentifierHandler(_uow_factory(SessionLocal))
+
+    result_a = handler.handle(
+        FindResourceByIdentifierQuery(
+            tenant_id=tenant_a,
+            identifier_type_id=identifier_type_id,
+            namespace=None,
+            normalized_value="shared.example.com",
+        )
+    )
+    result_b = handler.handle(
+        FindResourceByIdentifierQuery(
+            tenant_id=tenant_b,
+            identifier_type_id=identifier_type_id,
+            namespace=None,
+            normalized_value="shared.example.com",
+        )
+    )
+
+    assert result_a.resource.id == resource_a.id
+    assert result_b.resource.id == resource_b.id
+
+
+def test_alias_lookup_matches_exact_alias_key_and_value_boundary(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        resource = _resource(setup, tenant_id, _slug("alias"), created_at=_now(-5))
+        alias = _alias(
+            setup,
+            resource,
+            alias_type="dns_name",
+            normalized_value="CaseSensitive-Key",
+            alias_value="Example.COM",
+        )
+        _alias(
+            setup,
+            resource,
+            alias_type="display_name",
+            normalized_value="CaseSensitive-Key",
+            alias_value="Example.COM",
+        )
+        setup.commit()
+    handler = FindResourceByAliasHandler(_uow_factory(SessionLocal))
+
+    result = handler.handle(
+        FindResourceByAliasQuery(
+            tenant_id=tenant_id,
+            alias_type="dns_name",
+            normalized_value="CaseSensitive-Key",
+        )
+    )
+
+    assert result.resource.id == resource.id
+    assert result.alias_id == alias.id
+    assert result.alias_type == "dns_name"
+    assert result.normalized_value == "CaseSensitive-Key"
+    assert result.alias_value == "Example.COM"
+    with pytest.raises(EntityNotFoundError):
+        handler.handle(
+            FindResourceByAliasQuery(
+                tenant_id=tenant_id,
+                alias_type="dns_name",
+                normalized_value="Example.COM",
+            )
+        )
+
+
+def test_alias_lookup_is_tenant_scoped(migrated_engine: Engine) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_a = _seed_tenant(setup, "tenant-a")
+        tenant_b = _seed_tenant(setup, "tenant-b")
+        resource_a = _resource(setup, tenant_a, _slug("alias-a"), created_at=_now(-5))
+        resource_b = _resource(setup, tenant_b, _slug("alias-b"), created_at=_now(-5))
+        _alias(setup, resource_a, normalized_value="shared.example.com")
+        _alias(setup, resource_b, normalized_value="shared.example.com")
+        setup.commit()
+    handler = FindResourceByAliasHandler(_uow_factory(SessionLocal))
+
+    result_a = handler.handle(
+        FindResourceByAliasQuery(
+            tenant_id=tenant_a,
+            alias_type="dns_name",
+            normalized_value="shared.example.com",
+        )
+    )
+    result_b = handler.handle(
+        FindResourceByAliasQuery(
+            tenant_id=tenant_b,
+            alias_type="dns_name",
+            normalized_value="shared.example.com",
+        )
+    )
+
+    assert result_a.resource.id == resource_a.id
+    assert result_b.resource.id == resource_b.id
+
+
+def test_identity_lookup_returns_matched_resource_not_canonical_target(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        source = _resource(setup, tenant_id, _slug("merged-source"), created_at=_now(-5))
+        target = _resource(setup, tenant_id, _slug("merged-target"), created_at=_now(-4))
+        _alias(setup, source, normalized_value="merged.example.com")
+        _merge(setup, source, target)
+        setup.commit()
+    alias_handler = FindResourceByAliasHandler(_uow_factory(SessionLocal))
+    canonical_handler = ResolveCanonicalResourceHandler(_uow_factory(SessionLocal))
+
+    alias_result = alias_handler.handle(
+        FindResourceByAliasQuery(
+            tenant_id=tenant_id,
+            alias_type="dns_name",
+            normalized_value="merged.example.com",
+        )
+    )
+    canonical_result = canonical_handler.handle(
+        ResolveCanonicalResourceQuery(tenant_id=tenant_id, resource_id=source.id)
+    )
+
+    assert alias_result.resource.id == source.id
+    assert canonical_result.canonical_resource_id == target.id
+
+
+def test_exact_identity_lookups_are_single_projection_queries_and_read_only(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        resource = _resource(setup, tenant_id, _slug("shape"), created_at=_now(-5))
+        identifier = _identifier(setup, resource, normalized_value="shape.example.com")
+        alias = _alias(setup, resource, normalized_value="shape.example.com")
+        setup.commit()
+    identifier_handler = FindResourceByIdentifierHandler(_uow_factory(SessionLocal))
+    alias_handler = FindResourceByAliasHandler(_uow_factory(SessionLocal))
+
+    with _capture_sql(migrated_engine) as identifier_statements:
+        identifier_result = identifier_handler.handle(
+            FindResourceByIdentifierQuery(
+                tenant_id=tenant_id,
+                identifier_type_id=identifier.identifier_type_id,
+                namespace=None,
+                normalized_value="shape.example.com",
+            )
+        )
+    with _capture_sql(migrated_engine) as alias_statements:
+        alias_result = alias_handler.handle(
+            FindResourceByAliasQuery(
+                tenant_id=tenant_id,
+                alias_type=alias.alias_type,
+                normalized_value="shape.example.com",
+            )
+        )
+
+    identifier_selects = [
+        statement
+        for statement in identifier_statements
+        if statement.lstrip().upper().startswith("SELECT")
+    ]
+    alias_selects = [
+        statement
+        for statement in alias_statements
+        if statement.lstrip().upper().startswith("SELECT")
+    ]
+    assert len(identifier_selects) == 1
+    assert len(alias_selects) == 1
+    combined_sql = "\n".join(identifier_selects + alias_selects).upper()
+    assert "RESOURCE_IDENTIFIER" in combined_sql
+    assert "RESOURCE_ALIAS" in combined_sql
+    assert "JOIN RESOURCE" in combined_sql
+    assert "VALID_TO IS NULL" in combined_sql
+    assert "OFFSET" not in combined_sql
+    assert "ILIKE" not in combined_sql
+    assert "LIKE" not in combined_sql
+    assert "TO_TSVECTOR" not in combined_sql
+    assert "TSQUERY" not in combined_sql
+    assert identifier_result.resource.id == resource.id
+    assert alias_result.resource.id == resource.id
+    with SessionLocal() as verification:
+        unchanged = verification.get(Resource, resource.id)
+        assert unchanged is not None
+        assert unchanged.record_version == resource.record_version
+        assert unchanged.updated_at == resource.updated_at
 
 
 def test_empty_page_is_tuple_with_no_next_cursor(migrated_engine: Engine) -> None:
