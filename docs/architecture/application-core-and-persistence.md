@@ -16,6 +16,46 @@ Database settings are loaded through `DatabaseSettings` in `api/app/db/settings.
 
 The application-service package is intentionally small. It defines immutable command and query objects, generic handler protocols, typed result contracts, a UnitOfWorkFactory protocol, and minimal reference handlers. It does not introduce a command bus, automatic discovery, transport schemas, lifecycle business workflows, or dependency-injection framework wiring.
 
+## Final 03.1 Resource Application Core Baseline
+
+Stage `03.1` now contains the complete Resource application-core baseline for the current persistence model. The implemented workflow inventory is:
+
+| Workflow | Contract | Handler | Result |
+| --- | --- | --- | --- |
+| Create base Resource | `CreateResourceCommand` | `CreateResourceHandler` | `ResourceCreatedResult` |
+| Read Resource by id | `GetResourceByIdQuery` | `GetResourceByIdHandler` | `ResourceReadResult` |
+| Read Resource details by id | `GetResourceDetailsQuery` | `GetResourceDetailsHandler` | `ResourceDetailsResult` |
+| Read Resource details by canonical name | `GetResourceByCanonicalNameQuery` | `GetResourceByCanonicalNameHandler` | `ResourceDetailsResult` |
+| Replace current Resource state | `TransitionResourceStateCommand` | `TransitionResourceStateHandler` | `ResourceStateTransitionedResult` |
+| Assign current identifier | `AssignResourceIdentifierCommand` | `AssignResourceIdentifierHandler` | `ResourceIdentifierAssignedResult` |
+| Assign current ownership | `AssignResourceOwnershipCommand` | `AssignResourceOwnershipHandler` | `ResourceOwnershipAssignedResult` |
+| Assign current relationship | `AssignResourceRelationshipCommand` | `AssignResourceRelationshipHandler` | `ResourceRelationshipAssignedResult` |
+| Assign alias | `AssignResourceAliasCommand` | `AssignResourceAliasHandler` | `ResourceAliasAssignedResult` |
+| Record merge lineage | `MergeResourceCommand` | `MergeResourceHandler` | `ResourceMergedResult` |
+| Assign current classification | `AssignResourceClassificationCommand` | `AssignResourceClassificationHandler` | `ResourceClassificationAssignedResult` |
+| Assign current label | `AssignResourceLabelCommand` | `AssignResourceLabelHandler` | `ResourceLabelAssignedResult` |
+| Resolve canonical Resource | `ResolveCanonicalResourceQuery` | `ResolveCanonicalResourceHandler` | `CanonicalResourceResolvedResult` |
+
+Read handlers use one fresh Unit of Work, perform tenant-scoped reads without write locks, materialize immutable results before Unit of Work exit, and never call `commit()`. Write handlers validate deterministic command-only data before opening a Unit of Work, perform explicit tenant-scoped checks and locks where required, mutate through narrow repositories, materialize immutable results before commit, call `commit()` exactly once as the final meaningful persistence operation, and perform no post-commit repository access.
+
+All tenant-owned Resource workflows require explicit `tenant_id`. Wrong-tenant lookups return the same application miss shape as absent rows. There is no `tenant_id=None`, ambient tenant context, global fallback lookup, or bypass flag in application contracts or tenant-owned repository contracts.
+
+The current Resource details projection exposes the read model deliberately:
+
+| Fact | Exposed in `ResourceDetailsResult`? |
+| --- | --- |
+| current state | yes |
+| current identifiers | yes |
+| current ownership | yes |
+| current classifications | yes |
+| current labels | yes |
+| aliases | yes |
+| relationships | no |
+| direct outgoing merge | yes |
+| canonical resolution | separate query |
+
+Relationship facts remain available through repository/query-service work later; `ResourceDetailsResult` does not currently expose outgoing or incoming relationships. Canonical resolution is intentionally separate and no ordinary Resource read silently canonicalizes the requested resource.
+
 ## Dependency Direction
 
 ```mermaid
@@ -531,7 +571,7 @@ sequenceDiagram
 
 Validation starts before a Unit of Work is created. The handler rejects command-only failures with `ValidationError("Invalid resource merge command", failures=(...))`: source and target must differ, `merged_at` must be timezone-aware, and nullable `reason` and `source` must not be blank when present. Direct self-merge is rejected in the application before PostgreSQL sees the row.
 
-After command-only validation, the handler opens one fresh Unit of Work and locks both endpoint resources through `uow.resources.get_for_update(tenant_id, resource_id)`. Locks are acquired in stable UUID string order to prevent opposite-direction lock-order deadlock patterns. Physical lock order does not change source -> target merge direction: the persisted row always uses the command's source as `source_resource_id` and the command's target as `target_resource_id`. Missing and wrong-tenant endpoints raise `EntityNotFoundError("Resource not found", entity_type="Resource", lookup_field="source_resource_id" | "target_resource_id", lookup_value=...)` by semantic endpoint role, not physical lock order.
+After command-only validation, the handler opens one fresh Unit of Work and locks both endpoint resources through `uow.resources.get_for_update(tenant_id, resource_id)`. Locks are acquired through the shared pure `_ordered_resource_ids(...)` helper, which returns stable UUID string order to prevent opposite-direction lock-order deadlock patterns. Physical lock order does not change source -> target merge direction: the persisted row always uses the command's source as `source_resource_id` and the command's target as `target_resource_id`. Missing and wrong-tenant endpoints raise `EntityNotFoundError("Resource not found", entity_type="Resource", lookup_field="source_resource_id" | "target_resource_id", lookup_value=...)` by semantic endpoint role, not physical lock order.
 
 The source resource may have at most one outgoing merge. The handler checks `uow.resource_merges.get_outgoing_merge(tenant_id, source_resource_id)` and raises `ConflictError("Resource is already merged", entity_type="ResourceMerge", conflict_field="source_resource_id", conflict_value=source_resource_id)` before mutation when one exists. The target may already have its own outgoing merge. For example, `B -> C` followed by `A -> B` is valid and records the immediate requested target, producing `A -> B -> C`; the command does not rewrite `A -> C` or resolve the terminal canonical resource.
 
@@ -842,6 +882,8 @@ Repository `add(...)`, lookup helpers, refresh helpers, and locking helpers neve
 
 Command handlers call `commit()` exactly once, after successful validation and repository interaction, and perform no repository operations after commit. Query handlers never call `commit()` and return typed result contracts rather than lazy session-bound query objects. Read-only query services may later use a separate controlled session pattern. SQLAlchemy and PostgreSQL errors are translated at the persistence boundary. Retry behavior for deadlocks or serialization failures must be explicit at the application orchestration level and must not be hidden inside repositories.
 
+`AssignResourceRelationshipHandler` and `MergeResourceHandler` are the only current dual-Resource write handlers. Both use the same deterministic `_ordered_resource_ids(...)` helper for physical lock order while preserving the semantic command roles in validation errors and persisted rows. Single-Resource mutation handlers lock only the requested tenant-owned Resource. Read handlers and canonical resolution do not take write locks.
+
 The existing `get_session()` helper remains available for lower-level framework integration. The existing `transaction_session()` helper remains for current low-level scripts or compatibility paths, but it is not the application-core transaction abstraction. New application command workflows should receive Unit of Work instances through `UnitOfWorkFactory`; outer infrastructure wiring may provide `SQLAlchemyUnitOfWork` behind that protocol.
 
 ## Tenant-Safety Rules
@@ -943,6 +985,8 @@ Temporal fact repository tests verify protocol compatibility, injected-session u
 Lineage repository tests verify protocol compatibility, injected-session usage, exact alias-to-resource lookup, direct alias listing, direct outgoing and incoming merge-edge lookup, wrong-tenant misses, deterministic ordering, append-only add and explicit flush behavior, rollback-by-default, explicit commit persistence, failed transaction cleanup, multi-repository atomicity, database constraint preservation, Unit of Work lifecycle, session sharing, and concrete adapter placement under persistence.
 
 Canonical Resource resolution query tests verify the frozen query contract, immutable entity-free result, requested-resource miss behavior, unmerged self-resolution, one-hop and multi-hop chains, immediate-target versus canonical-target semantics, incoming branch behavior, tenant isolation, cycle defense, broken terminal lineage defense, the 64-edge maximum and 65th-edge rejection rule, fresh Unit of Work usage per invocation, SQLAlchemy integration, and no commit, lock, add, path-compression, lineage-rewrite, cache, or resource-fact mutation behavior.
+
+Resource application-core integration tests verify cross-workflow composition using real PostgreSQL and actual handlers: base Resource creation plus representative facts through details read-back; state transition history plus current details read-back; directed relationship assignment without reverse-edge creation; merge chains plus canonical resolution without lineage rewrite; merge lineage-only behavior preserving source facts; representative cross-tenant not-found behavior; and representative commit-failure atomicity with fresh Unit of Work recovery.
 
 Application service architecture tests verify immutable commands, immutable queries, immutable typed results, structural `UnitOfWorkFactory` compatibility, fresh Unit of Work creation per execution, command handler commit-on-success behavior, rollback on command validation failure, query handler no-commit behavior, rollback on query misses, technology-neutral validation failures, and reference handler compatibility with the existing SQLAlchemy Unit of Work through factory injection.
 
