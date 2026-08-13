@@ -15,6 +15,11 @@ from app.application.ports.repositories import (
     TenantScopedLookupRepository,
 )
 from app.application.ports.resources import ResourceRepository
+from app.application.ports.resource_queries import (
+    ResourceQueryPage,
+    ResourceQueryService,
+    ResourceSummaryProjection,
+)
 from app.application.ports.temporal import (
     ResourceClassificationRepository,
     ResourceIdentifierRepository,
@@ -38,9 +43,12 @@ __all__ = [
     "ResourceLabelRepository",
     "ResourceMergeRepository",
     "ResourceOwnershipRepository",
+    "ResourceQueryPage",
+    "ResourceQueryService",
     "ResourceRelationshipRepository",
     "ResourceRepository",
     "ResourceStateRepository",
+    "ResourceSummaryProjection",
     "TenantRepository",
     "TenantScopedLookupRepository",
     "UnitOfWork",

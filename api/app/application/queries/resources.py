@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
+DEFAULT_RESOURCE_PAGE_SIZE = 50
+MIN_RESOURCE_PAGE_SIZE = 1
+MAX_RESOURCE_PAGE_SIZE = 200
+
 
 @dataclass(frozen=True)
 class GetResourceByIdQuery:
@@ -36,3 +40,14 @@ class ResolveCanonicalResourceQuery:
 
     tenant_id: UUID
     resource_id: UUID
+
+
+@dataclass(frozen=True)
+class ListResourcesQuery:
+    """Query for tenant-scoped Resource summary listing."""
+
+    tenant_id: UUID
+    resource_type_id: UUID | None = None
+    lifecycle_status_id: UUID | None = None
+    page_size: int = DEFAULT_RESOURCE_PAGE_SIZE
+    cursor: str | None = None

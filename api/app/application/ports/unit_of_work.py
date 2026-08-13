@@ -14,6 +14,7 @@ from app.application.ports.lineage import (
 from app.application.ports.labels import LabelRepository
 from app.application.ports.organizations import OrganizationRepository
 from app.application.ports.resources import ResourceRepository
+from app.application.ports.resource_queries import ResourceQueryService
 from app.application.ports.tenants import TenantRepository
 from app.application.ports.temporal import (
     ResourceClassificationRepository,
@@ -66,6 +67,7 @@ class UnitOfWork(Protocol):
     resource_states: ResourceStateRepository
     resource_aliases: ResourceAliasRepository
     resource_merges: ResourceMergeRepository
+    resource_queries: ResourceQueryService
 
     def __enter__(self) -> Self:
         """Open the Unit of Work and return the active instance."""

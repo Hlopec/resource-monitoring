@@ -38,6 +38,8 @@ The resource table does not carry `valid_from` and `valid_to` because those are 
 
 `source_priority` is constrained to the range `0..1000`, `confidence_score` is constrained to `0.0000..1.0000`, and `record_version` must remain greater than zero. Resource archive behavior is logical through `archived_at`. The snapshot fields on `resource` are intentionally retained for fast current-state reads; by service-layer policy they should equal the current `resource_state` row (`valid_to IS NULL`), while `resource_state` records the temporal history for those same state dimensions.
 
+The first Resource collection query orders Resource rows by `created_at ASC, id ASC` and uses keyset pagination over that tuple. Existing indexes support tenant plus type and tenant plus lifecycle-status filters, but the schema does not yet define a composite `(tenant_id, created_at, id)` index for the default list order. Query correctness does not depend on the composite index; it is a deferred scaling migration for high-volume collection reads.
+
 ### Resource identifier
 
 Resource identifier stores a specific identifier value for a resource, using an identifier type and a normalized representation. Each assignment remains temporally versioned so that the identity evidence can be audited and superseded when required.

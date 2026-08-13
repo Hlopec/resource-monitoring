@@ -23,11 +23,18 @@ from app.application.errors import (
     ValidationError,
     ValidationFailure,
 )
+from app.application.pagination import (
+    decode_resource_list_cursor,
+    encode_resource_list_cursor,
+)
 from app.application.ports import UnitOfWork, UnitOfWorkFactory
 from app.application.queries import (
     GetResourceByCanonicalNameQuery,
     GetResourceByIdQuery,
     GetResourceDetailsQuery,
+    ListResourcesQuery,
+    MAX_RESOURCE_PAGE_SIZE,
+    MIN_RESOURCE_PAGE_SIZE,
     ResolveCanonicalResourceQuery,
 )
 from app.application.results import (
@@ -46,8 +53,10 @@ from app.application.results import (
     ResourceMergedResult,
     ResourceOwnershipAssignedResult,
     ResourceOwnershipResult,
+    ResourcePageResult,
     ResourceReadResult,
     ResourceRelationshipAssignedResult,
+    ResourceSummaryResult,
     ResourceStateTransitionedResult,
     ResourceStateResult,
 )
@@ -65,6 +74,52 @@ from app.models import (
 
 INITIAL_RESOURCE_RECORD_VERSION = 1
 MAX_RESOURCE_MERGE_DEPTH = 64
+
+
+class ListResourcesHandler:
+    """Read-only handler for tenant-scoped Resource collection pages."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def handle(self, query: ListResourcesQuery) -> ResourcePageResult:
+        """Return one immutable page of Resource summary projections."""
+        _validate_list_resources_query(query)
+        after = decode_resource_list_cursor(query.cursor)
+        with self._uow_factory() as uow:
+            page = uow.resource_queries.list_resources(
+                query.tenant_id,
+                resource_type_id=query.resource_type_id,
+                lifecycle_status_id=query.lifecycle_status_id,
+                after=after,
+                limit=query.page_size,
+            )
+            items = tuple(
+                ResourceSummaryResult(
+                    resource_id=item.resource_id,
+                    tenant_id=item.tenant_id,
+                    resource_type_id=item.resource_type_id,
+                    lifecycle_status_id=item.lifecycle_status_id,
+                    canonical_name=item.canonical_name,
+                    display_name=item.display_name,
+                    record_version=item.record_version,
+                    first_seen_at=item.first_seen_at,
+                    last_seen_at=item.last_seen_at,
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
+                )
+                for item in page.items
+            )
+            next_cursor = (
+                encode_resource_list_cursor(page.next_position)
+                if page.next_position is not None
+                else None
+            )
+            return ResourcePageResult(
+                items=items,
+                next_cursor=next_cursor,
+                page_size=query.page_size,
+            )
 
 
 class GetResourceByIdHandler:
@@ -992,6 +1047,29 @@ def _validate_create_resource_command(command: CreateResourceCommand) -> None:
         raise ValidationError(
             "Invalid resource creation command",
             failures=tuple(failures),
+        )
+
+
+def _validate_list_resources_query(query: ListResourcesQuery) -> None:
+    if query.page_size < MIN_RESOURCE_PAGE_SIZE:
+        raise ValidationError(
+            "Invalid resource list query",
+            failures=(
+                ValidationFailure(
+                    "page_size",
+                    f"must be at least {MIN_RESOURCE_PAGE_SIZE}",
+                ),
+            ),
+        )
+    if query.page_size > MAX_RESOURCE_PAGE_SIZE:
+        raise ValidationError(
+            "Invalid resource list query",
+            failures=(
+                ValidationFailure(
+                    "page_size",
+                    f"must be at most {MAX_RESOURCE_PAGE_SIZE}",
+                ),
+            ),
         )
 
 

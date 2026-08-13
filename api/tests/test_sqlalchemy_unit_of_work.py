@@ -15,6 +15,7 @@ from app.persistence.sqlalchemy import (
     UnitOfWorkNotActiveError,
     UnitOfWorkStateError,
 )
+from app.persistence.sqlalchemy.queries import SQLAlchemyResourceQueryService
 
 
 class TrackingSession(Session):
@@ -292,6 +293,8 @@ def test_lifecycle_operations_require_active_single_use_context(
     with pytest.raises(UnitOfWorkNotActiveError):
         _ = unit_of_work.session
     with pytest.raises(UnitOfWorkNotActiveError):
+        _ = unit_of_work.resource_queries
+    with pytest.raises(UnitOfWorkNotActiveError):
         unit_of_work.commit()
     with pytest.raises(UnitOfWorkNotActiveError):
         unit_of_work.rollback()
@@ -302,6 +305,22 @@ def test_lifecycle_operations_require_active_single_use_context(
 
     with pytest.raises(UnitOfWorkStateError):
         unit_of_work.__enter__()
+
+
+def test_resource_query_service_follows_unit_of_work_lifecycle(
+    session_factory: CountingSessionFactory,
+) -> None:
+    unit_of_work = SQLAlchemyUnitOfWork(session_factory)
+
+    with unit_of_work:
+        query_service = unit_of_work.resource_queries
+
+        assert isinstance(query_service, SQLAlchemyResourceQueryService)
+        assert query_service is unit_of_work.resource_queries
+        assert session_factory.calls == 1
+
+    with pytest.raises(UnitOfWorkNotActiveError):
+        _ = unit_of_work.resource_queries
 
 
 def test_second_commit_and_rollback_after_commit_are_rejected(
