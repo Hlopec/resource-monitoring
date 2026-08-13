@@ -31,6 +31,7 @@ from app.application.ports import UnitOfWork, UnitOfWorkFactory
 from app.application.ports.resource_queries import (
     ResourceDetailsProjection,
     ResourceHistoryProjection,
+    ResourceRelationshipsProjection,
 )
 from app.application.queries import (
     FindResourceByAliasQuery,
@@ -39,6 +40,7 @@ from app.application.queries import (
     GetResourceByIdQuery,
     GetResourceDetailsQuery,
     GetResourceHistoryQuery,
+    GetResourceRelationshipsQuery,
     ListResourcesQuery,
     MAX_RESOURCE_PAGE_SIZE,
     MIN_RESOURCE_PAGE_SIZE,
@@ -70,6 +72,8 @@ from app.application.results import (
     ResourcePageResult,
     ResourceReadResult,
     ResourceRelationshipAssignedResult,
+    ResourceRelationshipResult,
+    ResourceRelationshipsResult,
     ResourceSummaryResult,
     ResourceStateTransitionedResult,
     ResourceStateHistoryResult,
@@ -362,6 +366,32 @@ class GetResourceHistoryHandler:
                     lookup_value=query.resource_id,
                 )
             return _build_resource_history_result(projection)
+
+
+class GetResourceRelationshipsHandler:
+    """Read-only handler for tenant-scoped direct Resource relationships."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def handle(
+        self,
+        query: GetResourceRelationshipsQuery,
+    ) -> ResourceRelationshipsResult:
+        """Return current one-hop relationships for one stored Resource."""
+        with self._uow_factory() as uow:
+            projection = uow.resource_queries.get_resource_relationships(
+                query.tenant_id,
+                query.resource_id,
+            )
+            if projection is None:
+                raise EntityNotFoundError(
+                    "Resource not found",
+                    entity_type="Resource",
+                    lookup_field="resource_id",
+                    lookup_value=query.resource_id,
+                )
+            return _build_resource_relationships_result(projection)
 
 
 class GetResourceByCanonicalNameHandler:
@@ -1735,5 +1765,28 @@ def _build_resource_history_result(
                 valid_to=identifier.valid_to,
             )
             for identifier in projection.identifiers
+        ),
+    )
+
+
+def _build_resource_relationships_result(
+    projection: ResourceRelationshipsProjection,
+) -> ResourceRelationshipsResult:
+    return ResourceRelationshipsResult(
+        resource_id=projection.resource_id,
+        tenant_id=projection.tenant_id,
+        relationships=tuple(
+            ResourceRelationshipResult(
+                id=relationship.id,
+                relationship_type_id=relationship.relationship_type_id,
+                source_resource_id=relationship.source_resource_id,
+                target_resource_id=relationship.target_resource_id,
+                direction=relationship.direction,
+                confidence_score=relationship.confidence_score,
+                valid_from=relationship.valid_from,
+                source=relationship.source,
+                created_at=relationship.created_at,
+            )
+            for relationship in projection.relationships
         ),
     )
