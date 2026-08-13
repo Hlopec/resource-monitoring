@@ -4,22 +4,28 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import and_, exists, or_, select
+from sqlalchemy import and_, exists, nulls_last, or_, select
 from sqlalchemy.orm import Session
 
 from app.application.pagination import ResourceListCursor
 from app.application.ports.resource_queries import (
     ResourceAliasProjection,
     ResourceAliasLookupProjection,
+    ResourceClassificationHistoryProjection,
     ResourceClassificationProjection,
     ResourceDetailsProjection,
+    ResourceHistoryProjection,
+    ResourceIdentifierHistoryProjection,
     ResourceIdentifierProjection,
     ResourceIdentifierLookupProjection,
+    ResourceLabelHistoryProjection,
     ResourceLabelProjection,
     ResourceMergeProjection,
+    ResourceOwnershipHistoryProjection,
     ResourceOwnershipProjection,
     ResourceQueryPage,
     ResourceQueryService,
+    ResourceStateHistoryProjection,
     ResourceStateProjection,
     ResourceSummaryProjection,
 )
@@ -393,6 +399,35 @@ class SQLAlchemyResourceQueryService(ResourceQueryService):
             outgoing_merge=outgoing_merge,
         )
 
+    def get_resource_history(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+    ) -> ResourceHistoryProjection | None:
+        core_statement = select(
+            Resource.id,
+            Resource.tenant_id,
+            Resource.resource_type_id,
+            Resource.canonical_name,
+            Resource.display_name,
+        ).where(Resource.tenant_id == tenant_id, Resource.id == resource_id)
+        core = self._session.execute(core_statement).one_or_none()
+        if core is None:
+            return None
+
+        return ResourceHistoryProjection(
+            id=core.id,
+            tenant_id=core.tenant_id,
+            resource_type_id=core.resource_type_id,
+            canonical_name=core.canonical_name,
+            display_name=core.display_name,
+            states=self._list_state_history(tenant_id, resource_id),
+            ownership=self._list_ownership_history(tenant_id, resource_id),
+            labels=self._list_label_history(tenant_id, resource_id),
+            classifications=self._list_classification_history(tenant_id, resource_id),
+            identifiers=self._list_identifier_history(tenant_id, resource_id),
+        )
+
     def _list_current_ownership(
         self,
         tenant_id: UUID,
@@ -585,6 +620,223 @@ class SQLAlchemyResourceQueryService(ResourceQueryService):
                 source=row.source,
                 first_seen_at=row.first_seen_at,
                 last_seen_at=row.last_seen_at,
+            )
+            for row in self._session.execute(statement)
+        )
+
+    def _list_state_history(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+    ) -> tuple[ResourceStateHistoryProjection, ...]:
+        statement = (
+            select(
+                ResourceState.id,
+                ResourceState.lifecycle_status_id,
+                ResourceState.criticality_id,
+                ResourceState.exposure_level_id,
+                ResourceState.source_priority,
+                ResourceState.confidence_score,
+                ResourceState.valid_from,
+                ResourceState.valid_to,
+                ResourceState.source,
+            )
+            .where(
+                ResourceState.tenant_id == tenant_id,
+                ResourceState.resource_id == resource_id,
+            )
+            .order_by(
+                ResourceState.valid_from,
+                nulls_last(ResourceState.valid_to),
+                ResourceState.id,
+            )
+        )
+        return tuple(
+            ResourceStateHistoryProjection(
+                id=row.id,
+                lifecycle_status_id=row.lifecycle_status_id,
+                criticality_id=row.criticality_id,
+                exposure_level_id=row.exposure_level_id,
+                source_priority=row.source_priority,
+                confidence_score=row.confidence_score,
+                valid_from=row.valid_from,
+                valid_to=row.valid_to,
+                source=row.source,
+            )
+            for row in self._session.execute(statement)
+        )
+
+    def _list_ownership_history(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+    ) -> tuple[ResourceOwnershipHistoryProjection, ...]:
+        statement = (
+            select(
+                ResourceOwnership.id,
+                ResourceOwnership.organization_id,
+                ResourceOwnership.ownership_role_id,
+                ResourceOwnership.is_primary,
+                ResourceOwnership.confidence_score,
+                ResourceOwnership.valid_from,
+                ResourceOwnership.valid_to,
+                ResourceOwnership.source,
+            )
+            .where(
+                ResourceOwnership.tenant_id == tenant_id,
+                ResourceOwnership.resource_id == resource_id,
+            )
+            .order_by(
+                ResourceOwnership.valid_from,
+                nulls_last(ResourceOwnership.valid_to),
+                ResourceOwnership.ownership_role_id,
+                ResourceOwnership.organization_id,
+                ResourceOwnership.id,
+            )
+        )
+        return tuple(
+            ResourceOwnershipHistoryProjection(
+                id=row.id,
+                organization_id=row.organization_id,
+                ownership_role_id=row.ownership_role_id,
+                is_primary=row.is_primary,
+                confidence_score=row.confidence_score,
+                valid_from=row.valid_from,
+                valid_to=row.valid_to,
+                source=row.source,
+            )
+            for row in self._session.execute(statement)
+        )
+
+    def _list_label_history(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+    ) -> tuple[ResourceLabelHistoryProjection, ...]:
+        statement = (
+            select(
+                ResourceLabel.id,
+                ResourceLabel.label_id,
+                ResourceLabel.valid_from,
+                ResourceLabel.valid_to,
+                ResourceLabel.source,
+            )
+            .join(
+                Label,
+                and_(
+                    Label.tenant_id == ResourceLabel.tenant_id,
+                    Label.id == ResourceLabel.label_id,
+                ),
+            )
+            .where(
+                ResourceLabel.tenant_id == tenant_id,
+                ResourceLabel.resource_id == resource_id,
+            )
+            .order_by(
+                ResourceLabel.valid_from,
+                nulls_last(ResourceLabel.valid_to),
+                Label.key,
+                Label.value,
+                ResourceLabel.label_id,
+                ResourceLabel.id,
+            )
+        )
+        return tuple(
+            ResourceLabelHistoryProjection(
+                id=row.id,
+                label_id=row.label_id,
+                valid_from=row.valid_from,
+                valid_to=row.valid_to,
+                source=row.source,
+            )
+            for row in self._session.execute(statement)
+        )
+
+    def _list_classification_history(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+    ) -> tuple[ResourceClassificationHistoryProjection, ...]:
+        statement = (
+            select(
+                ResourceClassification.id,
+                ResourceClassification.classification_type_id,
+                ResourceClassification.classification_value_id,
+                ResourceClassification.is_primary,
+                ResourceClassification.confidence_score,
+                ResourceClassification.valid_from,
+                ResourceClassification.valid_to,
+                ResourceClassification.source,
+            )
+            .where(
+                ResourceClassification.tenant_id == tenant_id,
+                ResourceClassification.resource_id == resource_id,
+            )
+            .order_by(
+                ResourceClassification.valid_from,
+                nulls_last(ResourceClassification.valid_to),
+                ResourceClassification.classification_type_id,
+                ResourceClassification.classification_value_id,
+                ResourceClassification.is_primary,
+                ResourceClassification.id,
+            )
+        )
+        return tuple(
+            ResourceClassificationHistoryProjection(
+                id=row.id,
+                classification_type_id=row.classification_type_id,
+                classification_value_id=row.classification_value_id,
+                is_primary=row.is_primary,
+                confidence_score=row.confidence_score,
+                valid_from=row.valid_from,
+                valid_to=row.valid_to,
+                source=row.source,
+            )
+            for row in self._session.execute(statement)
+        )
+
+    def _list_identifier_history(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+    ) -> tuple[ResourceIdentifierHistoryProjection, ...]:
+        statement = (
+            select(
+                ResourceIdentifier.id,
+                ResourceIdentifier.identifier_type_id,
+                ResourceIdentifier.namespace,
+                ResourceIdentifier.normalized_value,
+                ResourceIdentifier.original_value,
+                ResourceIdentifier.is_primary,
+                ResourceIdentifier.confidence_score,
+                ResourceIdentifier.valid_from,
+                ResourceIdentifier.valid_to,
+            )
+            .where(
+                ResourceIdentifier.tenant_id == tenant_id,
+                ResourceIdentifier.resource_id == resource_id,
+            )
+            .order_by(
+                ResourceIdentifier.valid_from,
+                nulls_last(ResourceIdentifier.valid_to),
+                ResourceIdentifier.identifier_type_id,
+                ResourceIdentifier.namespace.is_not(None),
+                ResourceIdentifier.namespace,
+                ResourceIdentifier.normalized_value,
+                ResourceIdentifier.id,
+            )
+        )
+        return tuple(
+            ResourceIdentifierHistoryProjection(
+                id=row.id,
+                identifier_type_id=row.identifier_type_id,
+                namespace=row.namespace,
+                normalized_value=row.normalized_value,
+                original_value=row.original_value,
+                is_primary=row.is_primary,
+                confidence_score=row.confidence_score,
+                valid_from=row.valid_from,
+                valid_to=row.valid_to,
             )
             for row in self._session.execute(statement)
         )
