@@ -181,6 +181,91 @@ class ResourceDetailsProjection:
     outgoing_merge: ResourceMergeProjection | None
 
 
+@dataclass(frozen=True)
+class ResourceStateHistoryProjection:
+    """Technology-neutral stored ResourceState interval for history reads."""
+
+    id: UUID
+    lifecycle_status_id: UUID
+    criticality_id: UUID
+    exposure_level_id: UUID
+    source_priority: int
+    confidence_score: Decimal
+    valid_from: datetime
+    valid_to: datetime | None
+    source: str | None
+
+
+@dataclass(frozen=True)
+class ResourceOwnershipHistoryProjection:
+    """Technology-neutral stored ResourceOwnership interval for history reads."""
+
+    id: UUID
+    organization_id: UUID
+    ownership_role_id: UUID
+    is_primary: bool
+    confidence_score: Decimal
+    valid_from: datetime
+    valid_to: datetime | None
+    source: str | None
+
+
+@dataclass(frozen=True)
+class ResourceLabelHistoryProjection:
+    """Technology-neutral stored ResourceLabel interval for history reads."""
+
+    id: UUID
+    label_id: UUID
+    valid_from: datetime
+    valid_to: datetime | None
+    source: str | None
+
+
+@dataclass(frozen=True)
+class ResourceClassificationHistoryProjection:
+    """Technology-neutral stored ResourceClassification interval for history reads."""
+
+    id: UUID
+    classification_type_id: UUID
+    classification_value_id: UUID
+    is_primary: bool
+    confidence_score: Decimal
+    valid_from: datetime
+    valid_to: datetime | None
+    source: str | None
+
+
+@dataclass(frozen=True)
+class ResourceIdentifierHistoryProjection:
+    """Technology-neutral stored ResourceIdentifier interval for history reads."""
+
+    id: UUID
+    identifier_type_id: UUID
+    namespace: str | None
+    normalized_value: str
+    original_value: str
+    is_primary: bool
+    confidence_score: Decimal
+    valid_from: datetime
+    valid_to: datetime | None
+
+
+@dataclass(frozen=True)
+class ResourceHistoryProjection:
+    """Technology-neutral fully materialized Resource temporal history."""
+
+    id: UUID
+    tenant_id: UUID
+    resource_type_id: UUID
+    canonical_name: str
+    display_name: str
+    states: tuple[ResourceStateHistoryProjection, ...]
+    ownership: tuple[ResourceOwnershipHistoryProjection, ...]
+    labels: tuple[ResourceLabelHistoryProjection, ...]
+    classifications: tuple[ResourceClassificationHistoryProjection, ...]
+    identifiers: tuple[ResourceIdentifierHistoryProjection, ...]
+
+
 class ResourceQueryService(Protocol):
     """Tenant-scoped read service for Resource collection projections."""
 
@@ -227,4 +312,12 @@ class ResourceQueryService(Protocol):
         resource_id: UUID,
     ) -> ResourceDetailsProjection | None:
         """Return one fully materialized Resource details projection."""
+        ...
+
+    def get_resource_history(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+    ) -> ResourceHistoryProjection | None:
+        """Return one fully materialized Resource temporal history projection."""
         ...

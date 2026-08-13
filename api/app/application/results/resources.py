@@ -301,3 +301,88 @@ class ResourceDetailsResult:
     labels: tuple[ResourceLabelResult, ...]
     aliases: tuple[ResourceAliasResult, ...]
     outgoing_merge: ResourceMergeResult | None
+
+
+@dataclass(frozen=True)
+class ResourceStateHistoryResult:
+    """Stored ResourceState interval projection."""
+
+    id: UUID
+    lifecycle_status_id: UUID
+    criticality_id: UUID
+    exposure_level_id: UUID
+    source_priority: int
+    confidence_score: Decimal
+    valid_from: datetime
+    valid_to: datetime | None
+    source: str | None
+
+
+@dataclass(frozen=True)
+class ResourceOwnershipHistoryResult:
+    """Stored ResourceOwnership interval projection."""
+
+    id: UUID
+    organization_id: UUID
+    ownership_role_id: UUID
+    is_primary: bool
+    confidence_score: Decimal
+    valid_from: datetime
+    valid_to: datetime | None
+    source: str | None
+
+
+@dataclass(frozen=True)
+class ResourceLabelHistoryResult:
+    """Stored ResourceLabel interval projection."""
+
+    id: UUID
+    label_id: UUID
+    valid_from: datetime
+    valid_to: datetime | None
+    source: str | None
+
+
+@dataclass(frozen=True)
+class ResourceClassificationHistoryResult:
+    """Stored ResourceClassification interval projection."""
+
+    id: UUID
+    classification_type_id: UUID
+    classification_value_id: UUID
+    is_primary: bool
+    confidence_score: Decimal
+    valid_from: datetime
+    valid_to: datetime | None
+    source: str | None
+
+
+@dataclass(frozen=True)
+class ResourceIdentifierHistoryResult:
+    """Stored ResourceIdentifier interval projection."""
+
+    id: UUID
+    identifier_type_id: UUID
+    namespace: str | None
+    normalized_value: str
+    original_value: str
+    is_primary: bool
+    confidence_score: Decimal
+    valid_from: datetime
+    valid_to: datetime | None
+
+
+@dataclass(frozen=True)
+class ResourceHistoryResult:
+    """Fully materialized temporal Resource fact history."""
+
+    id: UUID
+    tenant_id: UUID
+    resource_type_id: UUID
+    canonical_name: str
+    display_name: str
+    states: tuple[ResourceStateHistoryResult, ...]
+    ownership: tuple[ResourceOwnershipHistoryResult, ...]
+    labels: tuple[ResourceLabelHistoryResult, ...]
+    classifications: tuple[ResourceClassificationHistoryResult, ...]
+    identifiers: tuple[ResourceIdentifierHistoryResult, ...]

@@ -32,6 +32,7 @@ from app.application.handlers import (
     GetResourceByCanonicalNameHandler,
     GetResourceByIdHandler,
     GetResourceDetailsHandler,
+    GetResourceHistoryHandler,
     ListResourcesHandler,
     MergeResourceHandler,
     QueryHandler,
@@ -57,15 +58,21 @@ from app.application.ports.resources import ResourceRepository
 from app.application.ports.resource_queries import (
     ResourceAliasProjection,
     ResourceAliasLookupProjection,
+    ResourceClassificationHistoryProjection,
     ResourceClassificationProjection,
     ResourceDetailsProjection,
+    ResourceHistoryProjection,
+    ResourceIdentifierHistoryProjection,
     ResourceIdentifierProjection,
     ResourceIdentifierLookupProjection,
+    ResourceLabelHistoryProjection,
     ResourceLabelProjection,
     ResourceMergeProjection,
+    ResourceOwnershipHistoryProjection,
     ResourceOwnershipProjection,
     ResourceQueryPage,
     ResourceQueryService,
+    ResourceStateHistoryProjection,
     ResourceStateProjection,
     ResourceSummaryProjection,
 )
@@ -73,18 +80,25 @@ from app.application.queries import (
     FindResourceByAliasQuery,
     FindResourceByIdentifierQuery,
     GetResourceDetailsQuery,
+    GetResourceHistoryQuery,
     ListResourcesQuery,
 )
 from app.application.results import (
     ResourceAliasLookupResult,
     ResourceAliasResult,
+    ResourceClassificationHistoryResult,
     ResourceClassificationResult,
     ResourceDetailsResult,
+    ResourceHistoryResult,
     ResourceIdentifierResult,
+    ResourceIdentifierHistoryResult,
     ResourceIdentifierLookupResult,
+    ResourceLabelHistoryResult,
     ResourceLabelResult,
+    ResourceOwnershipHistoryResult,
     ResourceOwnershipResult,
     ResourceSummaryResult,
+    ResourceStateHistoryResult,
     ResourceStateResult,
 )
 from app.application.ports.temporal import (
@@ -663,16 +677,20 @@ def test_resource_query_service_surface_remains_explicit_stage_03_only() -> None
         "find_by_alias",
         "find_by_identifier",
         "get_resource_details",
+        "get_resource_history",
         "list_resources",
     }
     assert {
         "filter",
         "find_any",
         "generic_details",
+        "generic_history",
+        "get_history",
         "lookup_any_identity",
         "paginate",
         "query",
         "search",
+        "timeline",
         "expand",
     }.isdisjoint(public_method_names)
 
@@ -702,6 +720,56 @@ def test_resource_details_contracts_are_explicit_and_entity_free() -> None:
     assert projection_hints["aliases"] == tuple[ResourceAliasProjection, ...]
     assert projection_hints["state"] == ResourceStateProjection | None
     assert projection_hints["outgoing_merge"] == ResourceMergeProjection | None
+    forbidden_entities = {
+        Resource,
+        ResourceAlias,
+        ResourceClassification,
+        ResourceIdentifier,
+        ResourceLabel,
+        ResourceMerge,
+        ResourceOwnership,
+        ResourceState,
+    }
+    assert forbidden_entities.isdisjoint(result_hints.values())
+    assert forbidden_entities.isdisjoint(projection_hints.values())
+
+
+def test_resource_history_contracts_are_explicit_and_entity_free() -> None:
+    query_hints = get_type_hints(GetResourceHistoryQuery)
+    result_hints = get_type_hints(ResourceHistoryResult)
+    projection_hints = get_type_hints(ResourceHistoryProjection)
+    history_method_hints = get_type_hints(ResourceQueryService.get_resource_history)
+
+    assert query_hints == {"tenant_id": UUID, "resource_id": UUID}
+    assert history_method_hints["tenant_id"] is UUID
+    assert history_method_hints["resource_id"] is UUID
+    assert history_method_hints["return"] == ResourceHistoryProjection | None
+    assert result_hints["states"] == tuple[ResourceStateHistoryResult, ...]
+    assert result_hints["ownership"] == tuple[ResourceOwnershipHistoryResult, ...]
+    assert result_hints["labels"] == tuple[ResourceLabelHistoryResult, ...]
+    assert (
+        result_hints["classifications"]
+        == tuple[ResourceClassificationHistoryResult, ...]
+    )
+    assert result_hints["identifiers"] == tuple[ResourceIdentifierHistoryResult, ...]
+    assert projection_hints["states"] == tuple[ResourceStateHistoryProjection, ...]
+    assert (
+        projection_hints["ownership"]
+        == tuple[ResourceOwnershipHistoryProjection, ...]
+    )
+    assert projection_hints["labels"] == tuple[ResourceLabelHistoryProjection, ...]
+    assert (
+        projection_hints["classifications"]
+        == tuple[ResourceClassificationHistoryProjection, ...]
+    )
+    assert (
+        projection_hints["identifiers"]
+        == tuple[ResourceIdentifierHistoryProjection, ...]
+    )
+    assert "aliases" not in result_hints
+    assert "outgoing_merge" not in result_hints
+    assert "aliases" not in projection_hints
+    assert "outgoing_merge" not in projection_hints
     forbidden_entities = {
         Resource,
         ResourceAlias,
@@ -806,6 +874,23 @@ def test_details_handler_is_query_service_backed_read_only_and_noncanonical() ->
     assert "canonical_resource_id" not in source
 
 
+def test_history_handler_is_query_service_backed_read_only_and_noncanonical() -> None:
+    source = inspect.getsource(GetResourceHistoryHandler)
+
+    assert "resource_queries.get_resource_history" in source
+    assert ".resources." not in source
+    assert ".commit(" not in source
+    assert ".rollback(" not in source
+    assert "get_for_update" not in source
+    assert ".add(" not in source
+    assert ".flush(" not in source
+    assert ".delete(" not in source
+    assert "ResolveCanonicalResource" not in source
+    assert "resolve_canonical" not in source
+    assert "follow_merges" not in source
+    assert "canonical_resource_id" not in source
+
+
 def test_multi_resource_handlers_share_deterministic_lock_order_helper() -> None:
     relationship_source = inspect.getsource(AssignResourceRelationshipHandler)
     merge_source = inspect.getsource(MergeResourceHandler)
@@ -897,6 +982,11 @@ def test_repository_protocols_define_expected_signatures() -> None:
     assert details_hints["tenant_id"] is UUID
     assert details_hints["resource_id"] is UUID
     assert details_hints["return"] == ResourceDetailsProjection | None
+
+    history_hints = get_type_hints(ResourceQueryService.get_resource_history)
+    assert history_hints["tenant_id"] is UUID
+    assert history_hints["resource_id"] is UUID
+    assert history_hints["return"] == ResourceHistoryProjection | None
 
     mutation_methods = (
         (TenantRepository, "add", Tenant),

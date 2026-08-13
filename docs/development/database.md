@@ -94,6 +94,14 @@ Details collection ordering is explicit: ownership by `ownership_role_id`, prima
 
 Details reads are anchored by tenant/resource indexes that already exist: `uq_resource_tenant_id_id`, tenant/resource indexes on state, ownership, label, classification, identifier, alias, and the merge source uniqueness index. No Stage `03.3.1` migration is required. If measured high-volume details reads need more help, consider partial current covering indexes by `(tenant_id, resource_id) WHERE valid_to IS NULL` for temporal detail collections.
 
+Stage `03.3.2` adds the separate temporal history workflow `GetResourceHistoryQuery(tenant_id, resource_id)` through `ResourceQueryService.get_resource_history(tenant_id, resource_id)`. `GetResourceDetailsQuery` remains current-state only. `ResourceHistoryResult` contains `id`, `tenant_id`, `resource_type_id`, `canonical_name`, `display_name`, `states`, `ownership`, `labels`, `classifications`, and `identifiers`. Nested history rows preserve stored `valid_from` and `valid_to` exactly, including `valid_to=None` for current rows.
+
+Resource history includes all stored rows for `resource_state`, `resource_ownership`, `resource_label`, `resource_classification`, and `resource_identifier`: closed historical rows and the current row. It does not include `ResourceAlias` temporal history because aliases are non-temporal, and it does not include `ResourceMerge` lineage history. The read model describes the requested stored Resource and does not automatically resolve merge lineage; canonical resolution remains separate.
+
+History ordering is deterministic: states by `valid_from`, `valid_to NULLS LAST`, id; ownership by `valid_from`, `valid_to NULLS LAST`, `ownership_role_id`, `organization_id`, id; labels by `valid_from`, `valid_to NULLS LAST`, label `key`, label `value`, `label_id`, assignment id; classifications by `valid_from`, `valid_to NULLS LAST`, `classification_type_id`, `classification_value_id`, `is_primary`, id; identifiers by `valid_from`, `valid_to NULLS LAST`, `identifier_type_id`, namespace nulls first, namespace, `normalized_value`, id.
+
+The SQLAlchemy adapter uses exactly six scalar SELECTs for an existing Resource: one core Resource/existence query plus one query per supported temporal fact table. Missing or wrong-tenant Resources stop after the core SELECT. There is no N+1 enrichment, no cartesian temporal join, no pagination, no hidden `LIMIT`, no `OFFSET`, no `COUNT`, and no `DISTINCT`. Existing tenant/resource indexes support correctness for resource-id-anchored history reads; if measured volumes require more ordering help, add future `(tenant_id, resource_id, valid_from, id)` indexes on temporal fact tables.
+
 ```python
 from app.persistence.sqlalchemy import SQLAlchemyUnitOfWork
 

@@ -44,6 +44,8 @@ Resource collection filters are exact and current-state oriented. Optional filte
 
 The Resource details read model is anchored by `(tenant_id, resource_id)` and describes the requested stored resource. It returns the current state, current ownership rows, current label assignments, all current classifications including non-primary rows, current identifiers, non-temporal aliases, and immediate outgoing merge metadata when present. Historical temporal facts are excluded. Details reads do not automatically resolve merge lineage to a canonical resource; canonical resolution remains a separate application query.
 
+The Resource history read model is a separate temporal workflow for the same requested stored resource. It returns all stored `resource_state`, `resource_ownership`, `resource_label`, `resource_classification`, and `resource_identifier` rows, including closed rows and current rows where `valid_to IS NULL`, with stored `valid_from` and `valid_to` intervals preserved. It does not infer alias history from `resource_alias.first_seen_at` or `last_seen_at`, and it does not expose ResourceMerge lineage history.
+
 ### Resource identifier
 
 Resource identifier stores a specific identifier value for a resource, using an identifier type and a normalized representation. Each assignment remains temporally versioned so that the identity evidence can be audited and superseded when required.

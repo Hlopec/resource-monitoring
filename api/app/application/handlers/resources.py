@@ -28,13 +28,17 @@ from app.application.pagination import (
     encode_resource_list_cursor,
 )
 from app.application.ports import UnitOfWork, UnitOfWorkFactory
-from app.application.ports.resource_queries import ResourceDetailsProjection
+from app.application.ports.resource_queries import (
+    ResourceDetailsProjection,
+    ResourceHistoryProjection,
+)
 from app.application.queries import (
     FindResourceByAliasQuery,
     FindResourceByIdentifierQuery,
     GetResourceByCanonicalNameQuery,
     GetResourceByIdQuery,
     GetResourceDetailsQuery,
+    GetResourceHistoryQuery,
     ListResourcesQuery,
     MAX_RESOURCE_PAGE_SIZE,
     MIN_RESOURCE_PAGE_SIZE,
@@ -46,23 +50,29 @@ from app.application.results import (
     ResourceAliasLookupResult,
     ResourceAliasResult,
     ResourceClassificationAssignedResult,
+    ResourceClassificationHistoryResult,
     ResourceIdentifierAssignedResult,
     ResourceIdentifierLookupResult,
     ResourceClassificationResult,
     ResourceCreatedResult,
     ResourceDetailsResult,
+    ResourceHistoryResult,
     ResourceIdentifierResult,
+    ResourceIdentifierHistoryResult,
     ResourceLabelAssignedResult,
     ResourceLabelResult,
+    ResourceLabelHistoryResult,
     ResourceMergeResult,
     ResourceMergedResult,
     ResourceOwnershipAssignedResult,
     ResourceOwnershipResult,
+    ResourceOwnershipHistoryResult,
     ResourcePageResult,
     ResourceReadResult,
     ResourceRelationshipAssignedResult,
     ResourceSummaryResult,
     ResourceStateTransitionedResult,
+    ResourceStateHistoryResult,
     ResourceStateResult,
 )
 from app.models import (
@@ -329,6 +339,29 @@ class GetResourceDetailsHandler:
                     lookup_value=query.resource_id,
                 )
             return _build_resource_details_result(projection)
+
+
+class GetResourceHistoryHandler:
+    """Read-only handler for tenant-scoped Resource temporal history."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    def handle(self, query: GetResourceHistoryQuery) -> ResourceHistoryResult:
+        """Return fully materialized temporal fact history for one Resource."""
+        with self._uow_factory() as uow:
+            projection = uow.resource_queries.get_resource_history(
+                query.tenant_id,
+                query.resource_id,
+            )
+            if projection is None:
+                raise EntityNotFoundError(
+                    "Resource not found",
+                    entity_type="Resource",
+                    lookup_field="resource_id",
+                    lookup_value=query.resource_id,
+                )
+            return _build_resource_history_result(projection)
 
 
 class GetResourceByCanonicalNameHandler:
@@ -1626,5 +1659,81 @@ def _build_resource_details_result(
             )
             if projection.outgoing_merge is not None
             else None
+        ),
+    )
+
+
+def _build_resource_history_result(
+    projection: ResourceHistoryProjection,
+) -> ResourceHistoryResult:
+    return ResourceHistoryResult(
+        id=projection.id,
+        tenant_id=projection.tenant_id,
+        resource_type_id=projection.resource_type_id,
+        canonical_name=projection.canonical_name,
+        display_name=projection.display_name,
+        states=tuple(
+            ResourceStateHistoryResult(
+                id=state.id,
+                lifecycle_status_id=state.lifecycle_status_id,
+                criticality_id=state.criticality_id,
+                exposure_level_id=state.exposure_level_id,
+                source_priority=state.source_priority,
+                confidence_score=state.confidence_score,
+                valid_from=state.valid_from,
+                valid_to=state.valid_to,
+                source=state.source,
+            )
+            for state in projection.states
+        ),
+        ownership=tuple(
+            ResourceOwnershipHistoryResult(
+                id=ownership.id,
+                organization_id=ownership.organization_id,
+                ownership_role_id=ownership.ownership_role_id,
+                is_primary=ownership.is_primary,
+                confidence_score=ownership.confidence_score,
+                valid_from=ownership.valid_from,
+                valid_to=ownership.valid_to,
+                source=ownership.source,
+            )
+            for ownership in projection.ownership
+        ),
+        labels=tuple(
+            ResourceLabelHistoryResult(
+                id=label.id,
+                label_id=label.label_id,
+                valid_from=label.valid_from,
+                valid_to=label.valid_to,
+                source=label.source,
+            )
+            for label in projection.labels
+        ),
+        classifications=tuple(
+            ResourceClassificationHistoryResult(
+                id=classification.id,
+                classification_type_id=classification.classification_type_id,
+                classification_value_id=classification.classification_value_id,
+                is_primary=classification.is_primary,
+                confidence_score=classification.confidence_score,
+                valid_from=classification.valid_from,
+                valid_to=classification.valid_to,
+                source=classification.source,
+            )
+            for classification in projection.classifications
+        ),
+        identifiers=tuple(
+            ResourceIdentifierHistoryResult(
+                id=identifier.id,
+                identifier_type_id=identifier.identifier_type_id,
+                namespace=identifier.namespace,
+                normalized_value=identifier.normalized_value,
+                original_value=identifier.original_value,
+                is_primary=identifier.is_primary,
+                confidence_score=identifier.confidence_score,
+                valid_from=identifier.valid_from,
+                valid_to=identifier.valid_to,
+            )
+            for identifier in projection.identifiers
         ),
     )
