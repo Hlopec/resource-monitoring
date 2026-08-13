@@ -46,6 +46,8 @@ Resource identifier stores a specific identifier value for a resource, using an 
 
 Current identifier uniqueness is scoped to `tenant_id`, `identifier_type_id`, namespace, and `normalized_value`, with `NULL` namespace treated as the empty namespace for uniqueness. `value_hash` is only a lookup accelerator; identity matching still requires full `normalized_value` comparison after hash lookup, and hash collisions must not conflict when normalized values differ.
 
+Application exact identifier lookup uses current rows only (`valid_to IS NULL`) and matches tenant, identifier type, namespace, and normalized value exactly. `original_value` remains stored evidence and is not a lookup key. The application query does not generate or trust a new hash value; it compares the full stored normalized value.
+
 ### Resource alias
 
 `resource_alias` stores tenant-owned alternate names or lookup keys that point to a resource but are not canonical deterministic identifiers. Aliases preserve historical lookup names such as old hostnames, display names, imported external aliases, or source-system naming artifacts. They differ from `resource_identifier`: identifiers are typed identity evidence used by matching policy, while aliases are operational lookup history and must not replace identifier matching rules.
@@ -53,6 +55,8 @@ Current identifier uniqueness is scoped to `tenant_id`, `identifier_type_id`, na
 The table uses a tenant-aware composite foreign key from `(tenant_id, resource_id)` to `resource(tenant_id, id)`, so PostgreSQL rejects cross-tenant alias rows. Within one tenant, `UNIQUE (tenant_id, alias_type, normalized_value)` ensures one alias lookup key resolves to exactly one resource. The same alias key can exist in different tenants, and the same normalized value can exist under different alias types.
 
 Alias normalization is deliberately not implemented in model events, database triggers, or migrations. Future callers must supply `normalized_value` explicitly. The database enforces non-empty `alias_type`, `alias_value`, and `normalized_value`, optional non-empty `source`, and `last_seen_at >= first_seen_at`. Resource deletes are restrictive while aliases reference the resource.
+
+Application exact alias lookup uses the tenant-local `alias_type` plus `normalized_value` key and returns the Resource directly referenced by that alias row. `alias_value` remains evidence/display data and does not participate in matching. Alias lookup does not follow merge lineage; canonical resolution is derived separately from `resource_merge`.
 
 ### Ownership role and resource ownership
 

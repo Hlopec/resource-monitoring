@@ -27,6 +27,8 @@ from app.application.handlers import (
     CommandHandler,
     CreateResourceHandler,
     EnsureResourceExistsHandler,
+    FindResourceByAliasHandler,
+    FindResourceByIdentifierHandler,
     GetResourceByCanonicalNameHandler,
     GetResourceByIdHandler,
     GetResourceDetailsHandler,
@@ -53,12 +55,22 @@ from app.application.ports.repositories import (
 )
 from app.application.ports.resources import ResourceRepository
 from app.application.ports.resource_queries import (
+    ResourceAliasLookupProjection,
+    ResourceIdentifierLookupProjection,
     ResourceQueryPage,
     ResourceQueryService,
     ResourceSummaryProjection,
 )
-from app.application.queries import ListResourcesQuery
-from app.application.results import ResourceSummaryResult
+from app.application.queries import (
+    FindResourceByAliasQuery,
+    FindResourceByIdentifierQuery,
+    ListResourcesQuery,
+)
+from app.application.results import (
+    ResourceAliasLookupResult,
+    ResourceIdentifierLookupResult,
+    ResourceSummaryResult,
+)
 from app.application.ports.temporal import (
     ResourceClassificationRepository,
     ResourceIdentifierRepository,
@@ -223,6 +235,8 @@ ALL_REPOSITORY_PROTOCOLS = (
     ResourceQueryService,
 )
 READ_HANDLER_TYPES = (
+    FindResourceByAliasHandler,
+    FindResourceByIdentifierHandler,
     GetResourceByCanonicalNameHandler,
     GetResourceByIdHandler,
     GetResourceDetailsHandler,
@@ -640,6 +654,33 @@ def test_resource_list_contracts_expose_scalar_ownership_fields_only() -> None:
     assert ResourceOwnership not in result_hints.values()
 
 
+def test_resource_identity_lookup_contracts_are_explicit_and_entity_free() -> None:
+    identifier_query_hints = get_type_hints(FindResourceByIdentifierQuery)
+    alias_query_hints = get_type_hints(FindResourceByAliasQuery)
+    identifier_result_hints = get_type_hints(ResourceIdentifierLookupResult)
+    alias_result_hints = get_type_hints(ResourceAliasLookupResult)
+    identifier_projection_hints = get_type_hints(ResourceIdentifierLookupProjection)
+    alias_projection_hints = get_type_hints(ResourceAliasLookupProjection)
+
+    assert identifier_query_hints == {
+        "tenant_id": UUID,
+        "identifier_type_id": UUID,
+        "namespace": str | None,
+        "normalized_value": str,
+    }
+    assert alias_query_hints == {
+        "tenant_id": UUID,
+        "alias_type": str,
+        "normalized_value": str,
+    }
+    assert Resource not in identifier_result_hints.values()
+    assert ResourceIdentifier not in identifier_result_hints.values()
+    assert ResourceAlias not in alias_result_hints.values()
+    assert Resource not in identifier_projection_hints.values()
+    assert ResourceIdentifier not in identifier_projection_hints.values()
+    assert ResourceAlias not in alias_projection_hints.values()
+
+
 def test_multi_resource_handlers_share_deterministic_lock_order_helper() -> None:
     relationship_source = inspect.getsource(AssignResourceRelationshipHandler)
     merge_source = inspect.getsource(MergeResourceHandler)
@@ -707,6 +748,22 @@ def test_repository_protocols_define_expected_signatures() -> None:
     assert query_hints["lifecycle_status_id"] == UUID | None
     assert query_hints["organization_id"] == UUID | None
     assert query_hints["return"] is ResourceQueryPage
+
+    identifier_lookup_hints = get_type_hints(ResourceQueryService.find_by_identifier)
+    assert identifier_lookup_hints["tenant_id"] is UUID
+    assert identifier_lookup_hints["identifier_type_id"] is UUID
+    assert identifier_lookup_hints["namespace"] == str | None
+    assert identifier_lookup_hints["normalized_value"] is str
+    assert (
+        identifier_lookup_hints["return"]
+        == ResourceIdentifierLookupProjection | None
+    )
+
+    alias_lookup_hints = get_type_hints(ResourceQueryService.find_by_alias)
+    assert alias_lookup_hints["tenant_id"] is UUID
+    assert alias_lookup_hints["alias_type"] is str
+    assert alias_lookup_hints["normalized_value"] is str
+    assert alias_lookup_hints["return"] == ResourceAliasLookupProjection | None
 
     mutation_methods = (
         (TenantRepository, "add", Tenant),

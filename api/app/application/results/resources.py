@@ -145,6 +145,30 @@ class ResourcePageResult:
 
 
 @dataclass(frozen=True)
+class ResourceIdentifierLookupResult:
+    """Exact ResourceIdentifier lookup result."""
+
+    resource: ResourceReadResult
+    identifier_id: UUID
+    identifier_type_id: UUID
+    namespace: str | None
+    normalized_value: str
+    original_value: str
+    is_primary: bool
+
+
+@dataclass(frozen=True)
+class ResourceAliasLookupResult:
+    """Exact ResourceAlias lookup result."""
+
+    resource: ResourceReadResult
+    alias_id: UUID
+    alias_type: str
+    normalized_value: str
+    alias_value: str
+
+
+@dataclass(frozen=True)
 class ResourceClassificationAssignedResult:
     """Result returned after a resource classification assignment is committed."""
 

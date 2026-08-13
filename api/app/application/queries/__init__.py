@@ -2,6 +2,8 @@
 
 from app.application.queries.resources import (
     DEFAULT_RESOURCE_PAGE_SIZE,
+    FindResourceByAliasQuery,
+    FindResourceByIdentifierQuery,
     GetResourceByCanonicalNameQuery,
     GetResourceByIdQuery,
     GetResourceDetailsQuery,
@@ -13,6 +15,8 @@ from app.application.queries.resources import (
 
 __all__ = [
     "DEFAULT_RESOURCE_PAGE_SIZE",
+    "FindResourceByAliasQuery",
+    "FindResourceByIdentifierQuery",
     "GetResourceByCanonicalNameQuery",
     "GetResourceByIdQuery",
     "GetResourceDetailsQuery",

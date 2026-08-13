@@ -43,6 +43,25 @@ class ResolveCanonicalResourceQuery:
 
 
 @dataclass(frozen=True)
+class FindResourceByIdentifierQuery:
+    """Exact current ResourceIdentifier lookup within one tenant."""
+
+    tenant_id: UUID
+    identifier_type_id: UUID
+    namespace: str | None
+    normalized_value: str
+
+
+@dataclass(frozen=True)
+class FindResourceByAliasQuery:
+    """Exact ResourceAlias lookup within one tenant."""
+
+    tenant_id: UUID
+    alias_type: str
+    normalized_value: str
+
+
+@dataclass(frozen=True)
 class ListResourcesQuery:
     """Query for tenant-scoped Resource summary listing."""
 

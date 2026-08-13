@@ -9,11 +9,13 @@ from sqlalchemy.orm import Session
 
 from app.application.pagination import ResourceListCursor
 from app.application.ports.resource_queries import (
+    ResourceAliasLookupProjection,
+    ResourceIdentifierLookupProjection,
     ResourceQueryPage,
     ResourceQueryService,
     ResourceSummaryProjection,
 )
-from app.models import Resource, ResourceOwnership
+from app.models import Resource, ResourceAlias, ResourceIdentifier, ResourceOwnership
 
 PRIMARY_OWNER_ROLE_ID = UUID("01984000-0000-7000-8000-000000000301")
 
@@ -23,6 +25,110 @@ class SQLAlchemyResourceQueryService(ResourceQueryService):
 
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    def find_by_identifier(
+        self,
+        tenant_id: UUID,
+        *,
+        identifier_type_id: UUID,
+        namespace: str | None,
+        normalized_value: str,
+    ) -> ResourceIdentifierLookupProjection | None:
+        statement = (
+            select(
+                Resource.id.label("resource_id"),
+                Resource.tenant_id,
+                Resource.canonical_name,
+                Resource.display_name,
+                ResourceIdentifier.id.label("identifier_id"),
+                ResourceIdentifier.identifier_type_id,
+                ResourceIdentifier.namespace,
+                ResourceIdentifier.normalized_value,
+                ResourceIdentifier.original_value,
+                ResourceIdentifier.is_primary,
+            )
+            .join(
+                Resource,
+                and_(
+                    Resource.tenant_id == ResourceIdentifier.tenant_id,
+                    Resource.id == ResourceIdentifier.resource_id,
+                ),
+            )
+            .where(
+                ResourceIdentifier.tenant_id == tenant_id,
+                Resource.tenant_id == tenant_id,
+                ResourceIdentifier.identifier_type_id == identifier_type_id,
+                ResourceIdentifier.normalized_value == normalized_value,
+                ResourceIdentifier.valid_to.is_(None),
+            )
+        )
+        if namespace is None:
+            statement = statement.where(ResourceIdentifier.namespace.is_(None))
+        else:
+            statement = statement.where(ResourceIdentifier.namespace == namespace)
+
+        row = self._session.execute(statement).one_or_none()
+        if row is None:
+            return None
+        return ResourceIdentifierLookupProjection(
+            resource_id=row.resource_id,
+            tenant_id=row.tenant_id,
+            canonical_name=row.canonical_name,
+            display_name=row.display_name,
+            identifier_id=row.identifier_id,
+            identifier_type_id=row.identifier_type_id,
+            namespace=row.namespace,
+            normalized_value=row.normalized_value,
+            original_value=row.original_value,
+            is_primary=row.is_primary,
+        )
+
+    def find_by_alias(
+        self,
+        tenant_id: UUID,
+        *,
+        alias_type: str,
+        normalized_value: str,
+    ) -> ResourceAliasLookupProjection | None:
+        statement = (
+            select(
+                Resource.id.label("resource_id"),
+                Resource.tenant_id,
+                Resource.canonical_name,
+                Resource.display_name,
+                ResourceAlias.id.label("alias_id"),
+                ResourceAlias.alias_type,
+                ResourceAlias.normalized_value,
+                ResourceAlias.alias_value,
+            )
+            .join(
+                Resource,
+                and_(
+                    Resource.tenant_id == ResourceAlias.tenant_id,
+                    Resource.id == ResourceAlias.resource_id,
+                ),
+            )
+            .where(
+                ResourceAlias.tenant_id == tenant_id,
+                Resource.tenant_id == tenant_id,
+                ResourceAlias.alias_type == alias_type,
+                ResourceAlias.normalized_value == normalized_value,
+            )
+        )
+
+        row = self._session.execute(statement).one_or_none()
+        if row is None:
+            return None
+        return ResourceAliasLookupProjection(
+            resource_id=row.resource_id,
+            tenant_id=row.tenant_id,
+            canonical_name=row.canonical_name,
+            display_name=row.display_name,
+            alias_id=row.alias_id,
+            alias_type=row.alias_type,
+            normalized_value=row.normalized_value,
+            alias_value=row.alias_value,
+        )
 
     def list_resources(
         self,
