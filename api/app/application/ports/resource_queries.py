@@ -21,6 +21,8 @@ class ResourceSummaryProjection:
     lifecycle_status_id: UUID
     canonical_name: str
     display_name: str | None
+    primary_organization_id: UUID | None
+    primary_ownership_role_id: UUID | None
     record_version: int
     first_seen_at: datetime
     last_seen_at: datetime
@@ -45,6 +47,7 @@ class ResourceQueryService(Protocol):
         *,
         resource_type_id: UUID | None,
         lifecycle_status_id: UUID | None,
+        organization_id: UUID | None,
         after: ResourceListCursor | None,
         limit: int,
     ) -> ResourceQueryPage:

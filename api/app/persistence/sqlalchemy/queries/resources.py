@@ -13,7 +13,9 @@ from app.application.ports.resource_queries import (
     ResourceQueryService,
     ResourceSummaryProjection,
 )
-from app.models import Resource
+from app.models import Resource, ResourceOwnership
+
+PRIMARY_OWNER_ROLE_ID = UUID("01984000-0000-7000-8000-000000000301")
 
 
 class SQLAlchemyResourceQueryService(ResourceQueryService):
@@ -28,9 +30,18 @@ class SQLAlchemyResourceQueryService(ResourceQueryService):
         *,
         resource_type_id: UUID | None,
         lifecycle_status_id: UUID | None,
+        organization_id: UUID | None,
         after: ResourceListCursor | None,
         limit: int,
     ) -> ResourceQueryPage:
+        current_primary_owner_join = and_(
+            ResourceOwnership.tenant_id == Resource.tenant_id,
+            ResourceOwnership.tenant_id == tenant_id,
+            ResourceOwnership.resource_id == Resource.id,
+            ResourceOwnership.ownership_role_id == PRIMARY_OWNER_ROLE_ID,
+            ResourceOwnership.is_primary.is_(True),
+            ResourceOwnership.valid_to.is_(None),
+        )
         statement = select(
             Resource.id,
             Resource.tenant_id,
@@ -38,17 +49,25 @@ class SQLAlchemyResourceQueryService(ResourceQueryService):
             Resource.lifecycle_status_id,
             Resource.canonical_name,
             Resource.display_name,
+            ResourceOwnership.organization_id.label("primary_organization_id"),
+            ResourceOwnership.ownership_role_id.label("primary_ownership_role_id"),
             Resource.record_version,
             Resource.first_seen_at,
             Resource.last_seen_at,
             Resource.created_at,
             Resource.updated_at,
-        ).where(Resource.tenant_id == tenant_id)
+        ).outerjoin(ResourceOwnership, current_primary_owner_join).where(
+            Resource.tenant_id == tenant_id
+        )
         if resource_type_id is not None:
             statement = statement.where(Resource.resource_type_id == resource_type_id)
         if lifecycle_status_id is not None:
             statement = statement.where(
                 Resource.lifecycle_status_id == lifecycle_status_id
+            )
+        if organization_id is not None:
+            statement = statement.where(
+                ResourceOwnership.organization_id == organization_id
             )
         if after is not None:
             statement = statement.where(
@@ -72,6 +91,8 @@ class SQLAlchemyResourceQueryService(ResourceQueryService):
                 lifecycle_status_id=row.lifecycle_status_id,
                 canonical_name=row.canonical_name,
                 display_name=row.display_name,
+                primary_organization_id=row.primary_organization_id,
+                primary_ownership_role_id=row.primary_ownership_role_id,
                 record_version=row.record_version,
                 first_seen_at=row.first_seen_at,
                 last_seen_at=row.last_seen_at,

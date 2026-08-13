@@ -91,6 +91,7 @@ class ListResourcesHandler:
                 query.tenant_id,
                 resource_type_id=query.resource_type_id,
                 lifecycle_status_id=query.lifecycle_status_id,
+                organization_id=query.organization_id,
                 after=after,
                 limit=query.page_size,
             )
@@ -102,6 +103,8 @@ class ListResourcesHandler:
                     lifecycle_status_id=item.lifecycle_status_id,
                     canonical_name=item.canonical_name,
                     display_name=item.display_name,
+                    primary_organization_id=item.primary_organization_id,
+                    primary_ownership_role_id=item.primary_ownership_role_id,
                     record_version=item.record_version,
                     first_seen_at=item.first_seen_at,
                     last_seen_at=item.last_seen_at,

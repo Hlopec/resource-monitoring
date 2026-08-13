@@ -43,6 +43,7 @@ class FakeResourceQueryService:
         *,
         resource_type_id: UUID | None,
         lifecycle_status_id: UUID | None,
+        organization_id: UUID | None,
         after: ResourceListCursor | None,
         limit: int,
     ) -> object:
@@ -52,6 +53,7 @@ class FakeResourceQueryService:
                 "tenant_id": tenant_id,
                 "resource_type_id": resource_type_id,
                 "lifecycle_status_id": lifecycle_status_id,
+                "organization_id": organization_id,
                 "after": after,
                 "limit": limit,
             }
@@ -123,6 +125,8 @@ def _summary(
         lifecycle_status_id=uuid4(),
         canonical_name=f"resource-{resource_id}.example.com",
         display_name="Resource",
+        primary_organization_id=uuid4(),
+        primary_ownership_role_id=uuid4(),
         record_version=1,
         first_seen_at=now,
         last_seen_at=now,
@@ -151,6 +155,7 @@ def test_list_resources_query_is_frozen_data_only() -> None:
         "tenant_id",
         "resource_type_id",
         "lifecycle_status_id",
+        "organization_id",
         "page_size",
         "cursor",
     }
@@ -243,6 +248,8 @@ def test_list_resources_handler_is_read_only_and_materializes_page() -> None:
                 lifecycle_status_id=item.lifecycle_status_id,
                 canonical_name=item.canonical_name,
                 display_name=item.display_name,
+                primary_organization_id=item.primary_organization_id,
+                primary_ownership_role_id=item.primary_ownership_role_id,
                 record_version=item.record_version,
                 first_seen_at=item.first_seen_at,
                 last_seen_at=item.last_seen_at,
@@ -267,6 +274,7 @@ def test_handler_passes_decoded_cursor_and_all_filters_to_query_service() -> Non
     tenant_id = uuid4()
     resource_type_id = uuid4()
     lifecycle_status_id = uuid4()
+    organization_id = uuid4()
     position = ResourceListCursor(datetime.now(UTC), uuid4())
     cursor = encode_resource_list_cursor(position)
     uow = FakeUnitOfWork()
@@ -277,6 +285,7 @@ def test_handler_passes_decoded_cursor_and_all_filters_to_query_service() -> Non
             tenant_id=tenant_id,
             resource_type_id=resource_type_id,
             lifecycle_status_id=lifecycle_status_id,
+            organization_id=organization_id,
             page_size=25,
             cursor=cursor,
         )
@@ -288,6 +297,7 @@ def test_handler_passes_decoded_cursor_and_all_filters_to_query_service() -> Non
             "tenant_id": tenant_id,
             "resource_type_id": resource_type_id,
             "lifecycle_status_id": lifecycle_status_id,
+            "organization_id": organization_id,
             "after": position,
             "limit": 25,
         }
