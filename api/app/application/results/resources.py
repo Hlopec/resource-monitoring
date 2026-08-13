@@ -117,6 +117,32 @@ class CanonicalResourceResolvedResult:
 
 
 @dataclass(frozen=True)
+class ResourceSummaryResult:
+    """Compact Resource summary projection for collection queries."""
+
+    resource_id: UUID
+    tenant_id: UUID
+    resource_type_id: UUID
+    lifecycle_status_id: UUID
+    canonical_name: str
+    display_name: str | None
+    record_version: int
+    first_seen_at: datetime
+    last_seen_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class ResourcePageResult:
+    """Immutable Resource summary page."""
+
+    items: tuple[ResourceSummaryResult, ...]
+    next_cursor: str | None
+    page_size: int
+
+
+@dataclass(frozen=True)
 class ResourceClassificationAssignedResult:
     """Result returned after a resource classification assignment is committed."""
 

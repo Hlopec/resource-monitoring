@@ -30,6 +30,7 @@ from app.application.handlers import (
     GetResourceByCanonicalNameHandler,
     GetResourceByIdHandler,
     GetResourceDetailsHandler,
+    ListResourcesHandler,
     MergeResourceHandler,
     QueryHandler,
     ResolveCanonicalResourceHandler,
@@ -51,6 +52,11 @@ from app.application.ports.repositories import (
     TenantScopedLookupRepository,
 )
 from app.application.ports.resources import ResourceRepository
+from app.application.ports.resource_queries import (
+    ResourceQueryPage,
+    ResourceQueryService,
+    ResourceSummaryProjection,
+)
 from app.application.ports.temporal import (
     ResourceClassificationRepository,
     ResourceIdentifierRepository,
@@ -100,6 +106,7 @@ from app.persistence.sqlalchemy.repositories import (
     SQLAlchemyResourceStateRepository,
     SQLAlchemyTenantRepository,
 )
+from app.persistence.sqlalchemy.queries import SQLAlchemyResourceQueryService
 
 ROOT = Path(__file__).resolve().parents[1]
 APPLICATION_ROOT = ROOT / "app" / "application"
@@ -120,6 +127,13 @@ SQLALCHEMY_TYPE_NAMES = {
     "Session",
 }
 FORBIDDEN_REPOSITORY_METHODS = {"commit", "rollback", "filter", "query", "execute"}
+FORBIDDEN_RESOURCE_REPOSITORY_LIST_METHODS = {
+    "filter_by_kwargs",
+    "list",
+    "paginate",
+    "query",
+    "search",
+}
 FORBIDDEN_REPLACEMENT_METHODS = {
     "close_current",
     "close_current_and_add",
@@ -204,11 +218,13 @@ ALL_REPOSITORY_PROTOCOLS = (
     ResourceStateRepository,
     ResourceAliasRepository,
     ResourceMergeRepository,
+    ResourceQueryService,
 )
 READ_HANDLER_TYPES = (
     GetResourceByCanonicalNameHandler,
     GetResourceByIdHandler,
     GetResourceDetailsHandler,
+    ListResourcesHandler,
     ResolveCanonicalResourceHandler,
 )
 WRITE_HANDLER_TYPES = (
@@ -421,6 +437,7 @@ def test_unit_of_work_protocol_exposes_technology_neutral_repositories() -> None
     assert hints["resource_states"] is ResourceStateRepository
     assert hints["resource_aliases"] is ResourceAliasRepository
     assert hints["resource_merges"] is ResourceMergeRepository
+    assert hints["resource_queries"] is ResourceQueryService
 
 
 def test_unit_of_work_factory_protocol_returns_unit_of_work() -> None:
@@ -459,6 +476,12 @@ def test_repository_contracts_do_not_expose_transaction_or_generic_query_methods
                 parameter.kind is inspect.Parameter.VAR_KEYWORD
                 for parameter in signature.parameters.values()
             ), (protocol, name)
+
+
+def test_resource_repository_remains_transactional_not_collection_query_service() -> None:
+    public_method_names = {name for name, _ in _public_methods(ResourceRepository)}
+
+    assert FORBIDDEN_RESOURCE_REPOSITORY_LIST_METHODS.isdisjoint(public_method_names)
 
 
 def test_concrete_repositories_stay_in_persistence_and_do_not_expose_transactions() -> None:
@@ -525,9 +548,23 @@ def test_reference_handlers_depend_on_unit_of_work_factory_only() -> None:
 def test_read_handlers_never_commit_or_mutate() -> None:
     for handler_type in READ_HANDLER_TYPES:
         called_methods = _called_attribute_names_for(handler_type)
+        source = inspect.getsource(handler_type)
         assert "commit" not in called_methods, handler_type
         assert "rollback" not in called_methods, handler_type
         assert "get_for_update" not in called_methods, handler_type
+        assert ".add(" not in source.replace("visited.add(", ""), handler_type
+        assert "flush" not in called_methods, handler_type
+
+
+def test_list_resources_handler_uses_query_service_boundary_only() -> None:
+    called_methods = _called_attribute_names_for(ListResourcesHandler)
+
+    assert "list_resources" in called_methods
+    assert "commit" not in called_methods
+    assert "rollback" not in called_methods
+    assert "get_for_update" not in called_methods
+    assert "add" not in called_methods
+    assert "flush" not in called_methods
 
 
 def test_write_handlers_commit_once_and_do_not_rollback() -> None:
@@ -573,6 +610,18 @@ def test_no_hidden_application_frameworks_are_introduced() -> None:
             if isinstance(node, ast.ClassDef | ast.FunctionDef)
         }
         assert FORBIDDEN_FRAMEWORK_NAMES.isdisjoint(defined_names), path
+
+
+def test_sqlalchemy_resource_query_service_lives_below_persistence_boundary() -> None:
+    assert SQLAlchemyResourceQueryService.__module__.startswith(
+        "app.persistence.sqlalchemy.queries"
+    )
+    public_method_names = {
+        name for name, _ in _public_methods(SQLAlchemyResourceQueryService)
+    }
+    assert {"commit", "rollback", "get_for_update", "add", "flush"}.isdisjoint(
+        public_method_names
+    )
 
 
 def test_multi_resource_handlers_share_deterministic_lock_order_helper() -> None:
@@ -635,6 +684,10 @@ def test_repository_protocols_define_expected_signatures() -> None:
     for (protocol, method_name), expected_return in expected_returns.items():
         hints = get_type_hints(getattr(protocol, method_name))
         assert hints["return"] == expected_return
+
+    query_hints = get_type_hints(ResourceQueryService.list_resources)
+    assert query_hints["tenant_id"] is UUID
+    assert query_hints["return"] is ResourceQueryPage
 
     mutation_methods = (
         (TenantRepository, "add", Tenant),

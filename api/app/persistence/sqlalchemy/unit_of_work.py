@@ -18,6 +18,7 @@ from app.models import (
     RelationshipType,
     ResourceType,
 )
+from app.persistence.sqlalchemy.queries import SQLAlchemyResourceQueryService
 from app.persistence.sqlalchemy.repositories import (
     SQLAlchemyClassificationValueRepository,
     SQLAlchemyLabelRepository,
@@ -111,6 +112,7 @@ class SQLAlchemyUnitOfWork:
         self._resource_states: SQLAlchemyResourceStateRepository | None = None
         self._resource_aliases: SQLAlchemyResourceAliasRepository | None = None
         self._resource_merges: SQLAlchemyResourceMergeRepository | None = None
+        self._resource_queries: SQLAlchemyResourceQueryService | None = None
         self._state = _UnitOfWorkState.NEW
 
     def __enter__(self) -> SQLAlchemyUnitOfWork:
@@ -172,6 +174,7 @@ class SQLAlchemyUnitOfWork:
         self._resource_states = SQLAlchemyResourceStateRepository(self.session)
         self._resource_aliases = SQLAlchemyResourceAliasRepository(self.session)
         self._resource_merges = SQLAlchemyResourceMergeRepository(self.session)
+        self._resource_queries = SQLAlchemyResourceQueryService(self.session)
         return self
 
     def __exit__(
@@ -211,6 +214,7 @@ class SQLAlchemyUnitOfWork:
                 self._resource_states = None
                 self._resource_aliases = None
                 self._resource_merges = None
+                self._resource_queries = None
                 self._state = _UnitOfWorkState.CLOSED
 
         return False
@@ -392,6 +396,14 @@ class SQLAlchemyUnitOfWork:
         if self._resource_merges is None:
             raise UnitOfWorkNotActiveError("Resource merge repository is not active")
         return self._resource_merges
+
+    @property
+    def resource_queries(self) -> SQLAlchemyResourceQueryService:
+        """Return the active Resource query service."""
+        self.session
+        if self._resource_queries is None:
+            raise UnitOfWorkNotActiveError("Resource query service is not active")
+        return self._resource_queries
 
     @property
     def session(self) -> Session:
