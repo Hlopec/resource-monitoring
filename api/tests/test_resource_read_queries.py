@@ -28,6 +28,16 @@ from app.application.results import (
     ResourceOwnershipResult,
     ResourceStateResult,
 )
+from app.application.ports.resource_queries import (
+    ResourceAliasProjection,
+    ResourceClassificationProjection,
+    ResourceDetailsProjection,
+    ResourceIdentifierProjection,
+    ResourceLabelProjection,
+    ResourceMergeProjection,
+    ResourceOwnershipProjection,
+    ResourceStateProjection,
+)
 from app.db.seed.catalogs import seed_catalogs
 from app.models import (
     ClassificationType,
@@ -161,10 +171,29 @@ class FakeResourceMerges:
         return self._outgoing_merge
 
 
+class FakeResourceQueryService:
+    def __init__(
+        self,
+        events: list[str],
+        details: dict[tuple[UUID, UUID], ResourceDetailsProjection],
+    ) -> None:
+        self._events = events
+        self._details = details
+
+    def get_resource_details(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+    ) -> ResourceDetailsProjection | None:
+        self._events.append("resource_queries.get_resource_details")
+        return self._details.get((tenant_id, resource_id))
+
+
 class FakeUnitOfWork:
     def __init__(
         self,
         resources: dict[tuple[UUID, UUID], object],
+        details: dict[tuple[UUID, UUID], ResourceDetailsProjection] | None = None,
         *,
         state: object | None = None,
         identifiers: tuple[object, ...] = (),
@@ -189,6 +218,10 @@ class FakeUnitOfWork:
         self.resource_labels = FakeResourceLabels(self.events, labels)
         self.resource_aliases = FakeResourceAliases(self.events, aliases)
         self.resource_merges = FakeResourceMerges(self.events, outgoing_merge)
+        self.resource_queries = FakeResourceQueryService(
+            self.events,
+            details or {},
+        )
 
     def __enter__(self) -> FakeUnitOfWork:
         self.events.append("enter")
@@ -266,8 +299,101 @@ def _details_uow(
         resource_id,
         canonical_name=canonical_name,
     )
+    primary_ownership = ResourceOwnershipProjection(
+        id=uuid4(),
+        organization_id=organization_id,
+        ownership_role_id=ownership_role_id,
+        is_primary=True,
+        confidence_score=Decimal("0.7000"),
+        valid_from=_now(-7),
+        source="manual",
+    )
+    details = ResourceDetailsProjection(
+        id=resource_id,
+        tenant_id=tenant_id,
+        organization_id=organization_id,
+        resource_type_id=resource.resource_type_id,
+        canonical_name=canonical_name,
+        display_name=resource.display_name,
+        record_version=resource.record_version,
+        created_at=resource.created_at,
+        updated_at=resource.updated_at,
+        state=ResourceStateProjection(
+            id=uuid4(),
+            lifecycle_status_id=lifecycle_status_id,
+            criticality_id=criticality_id,
+            exposure_level_id=exposure_level_id,
+            source_priority=100,
+            confidence_score=Decimal("0.9000"),
+            valid_from=_now(-20),
+            source="collector",
+        ),
+        primary_ownership=primary_ownership,
+        identifiers=(
+            ResourceIdentifierProjection(
+                id=uuid4(),
+                identifier_type_id=identifier_type_id,
+                namespace=None,
+                normalized_value="a.example.com",
+                original_value="A.EXAMPLE.COM",
+                is_primary=True,
+                confidence_score=Decimal("0.9500"),
+                valid_from=_now(-9),
+            ),
+            ResourceIdentifierProjection(
+                id=uuid4(),
+                identifier_type_id=identifier_type_id,
+                namespace=None,
+                normalized_value="b.example.com",
+                original_value="B.EXAMPLE.COM",
+                is_primary=False,
+                confidence_score=Decimal("0.8000"),
+                valid_from=_now(-8),
+            ),
+        ),
+        ownership=(primary_ownership,),
+        classifications=(
+            ResourceClassificationProjection(
+                id=uuid4(),
+                classification_type_id=classification_type_id,
+                classification_value_id=classification_value_id,
+                is_primary=True,
+                confidence_score=Decimal("0.8500"),
+                valid_from=_now(-6),
+                source="manual",
+            ),
+        ),
+        labels=(
+            ResourceLabelProjection(
+                id=uuid4(),
+                label_id=label_id,
+                valid_from=_now(-5),
+                source="manual",
+            ),
+        ),
+        aliases=(
+            ResourceAliasProjection(
+                id=uuid4(),
+                alias_type="hostname",
+                alias_value="B.EXAMPLE.COM",
+                normalized_value="b.example.com",
+                source="manual",
+                first_seen_at=_now(-4),
+                last_seen_at=_now(-3),
+            ),
+        ),
+        outgoing_merge=ResourceMergeProjection(
+            id=uuid4(),
+            source_resource_id=resource_id,
+            target_resource_id=target_resource_id,
+            reason="duplicate",
+            source="manual",
+            merged_at=_now(-2),
+        ),
+    )
     return FakeUnitOfWork(
         {(tenant_id, resource_id): resource},
+        details={(tenant_id, resource_id): details},
         state=SimpleNamespace(
             id=uuid4(),
             lifecycle_status_id=lifecycle_status_id,
@@ -411,14 +537,7 @@ def test_details_handler_materializes_projection_with_one_unit_of_work() -> None
     assert uow.exited is True
     assert uow.events == [
         "enter",
-        "resources.get_by_id",
-        "resource_states.get_current",
-        "resource_identifiers.get_current_for_resource",
-        "resource_ownerships.get_current_for_resource",
-        "resource_classifications.get_current_for_resource",
-        "resource_labels.get_current_for_resource",
-        "resource_aliases.list_for_resource",
-        "resource_merges.get_outgoing_merge",
+        "resource_queries.get_resource_details",
         "exit",
     ]
     assert result.id == resource_id
@@ -452,7 +571,7 @@ def test_details_handler_raises_not_found_without_composition_reads() -> None:
     assert exc_info.value.lookup_field == "resource_id"
     assert exc_info.value.lookup_value == resource_id
     assert uow.commits == 0
-    assert uow.events == ["enter", "resources.get_by_id", "exit"]
+    assert uow.events == ["enter", "resource_queries.get_resource_details", "exit"]
 
 
 def test_details_handler_wrong_tenant_matches_not_found_behavior() -> None:
@@ -466,7 +585,7 @@ def test_details_handler_wrong_tenant_matches_not_found_behavior() -> None:
         handler.handle(GetResourceDetailsQuery(other_tenant_id, resource_id))
 
     assert uow.commits == 0
-    assert uow.events == ["enter", "resources.get_by_id", "exit"]
+    assert uow.events == ["enter", "resource_queries.get_resource_details", "exit"]
 
 
 def test_canonical_name_handler_uses_contract_lookup_without_normalizing() -> None:
@@ -485,7 +604,12 @@ def test_canonical_name_handler_uses_contract_lookup_without_normalizing() -> No
 
     assert result.id == resource_id
     assert uow.commits == 0
-    assert uow.events[1] == "resources.get_by_canonical_name"
+    assert uow.events == [
+        "enter",
+        "resources.get_by_canonical_name",
+        "resource_queries.get_resource_details",
+        "exit",
+    ]
 
 
 def test_canonical_name_handler_missing_and_wrong_tenant_do_not_leak() -> None:

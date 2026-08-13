@@ -55,21 +55,37 @@ from app.application.ports.repositories import (
 )
 from app.application.ports.resources import ResourceRepository
 from app.application.ports.resource_queries import (
+    ResourceAliasProjection,
     ResourceAliasLookupProjection,
+    ResourceClassificationProjection,
+    ResourceDetailsProjection,
+    ResourceIdentifierProjection,
     ResourceIdentifierLookupProjection,
+    ResourceLabelProjection,
+    ResourceMergeProjection,
+    ResourceOwnershipProjection,
     ResourceQueryPage,
     ResourceQueryService,
+    ResourceStateProjection,
     ResourceSummaryProjection,
 )
 from app.application.queries import (
     FindResourceByAliasQuery,
     FindResourceByIdentifierQuery,
+    GetResourceDetailsQuery,
     ListResourcesQuery,
 )
 from app.application.results import (
     ResourceAliasLookupResult,
+    ResourceAliasResult,
+    ResourceClassificationResult,
+    ResourceDetailsResult,
+    ResourceIdentifierResult,
     ResourceIdentifierLookupResult,
+    ResourceLabelResult,
+    ResourceOwnershipResult,
     ResourceSummaryResult,
+    ResourceStateResult,
 )
 from app.application.ports.temporal import (
     ResourceClassificationRepository,
@@ -640,22 +656,64 @@ def test_sqlalchemy_resource_query_service_lives_below_persistence_boundary() ->
     )
 
 
-def test_resource_query_service_surface_remains_stage_03_2_only() -> None:
+def test_resource_query_service_surface_remains_explicit_stage_03_only() -> None:
     public_method_names = {name for name, _ in _public_methods(ResourceQueryService)}
 
     assert public_method_names == {
         "find_by_alias",
         "find_by_identifier",
+        "get_resource_details",
         "list_resources",
     }
     assert {
         "filter",
         "find_any",
+        "generic_details",
         "lookup_any_identity",
         "paginate",
         "query",
         "search",
+        "expand",
     }.isdisjoint(public_method_names)
+
+
+def test_resource_details_contracts_are_explicit_and_entity_free() -> None:
+    query_hints = get_type_hints(GetResourceDetailsQuery)
+    result_hints = get_type_hints(ResourceDetailsResult)
+    projection_hints = get_type_hints(ResourceDetailsProjection)
+    details_method_hints = get_type_hints(ResourceQueryService.get_resource_details)
+
+    assert query_hints == {"tenant_id": UUID, "resource_id": UUID}
+    assert details_method_hints["tenant_id"] is UUID
+    assert details_method_hints["resource_id"] is UUID
+    assert details_method_hints["return"] == ResourceDetailsProjection | None
+    assert result_hints["identifiers"] == tuple[ResourceIdentifierResult, ...]
+    assert result_hints["ownership"] == tuple[ResourceOwnershipResult, ...]
+    assert result_hints["classifications"] == tuple[ResourceClassificationResult, ...]
+    assert result_hints["labels"] == tuple[ResourceLabelResult, ...]
+    assert result_hints["aliases"] == tuple[ResourceAliasResult, ...]
+    assert projection_hints["identifiers"] == tuple[ResourceIdentifierProjection, ...]
+    assert projection_hints["ownership"] == tuple[ResourceOwnershipProjection, ...]
+    assert (
+        projection_hints["classifications"]
+        == tuple[ResourceClassificationProjection, ...]
+    )
+    assert projection_hints["labels"] == tuple[ResourceLabelProjection, ...]
+    assert projection_hints["aliases"] == tuple[ResourceAliasProjection, ...]
+    assert projection_hints["state"] == ResourceStateProjection | None
+    assert projection_hints["outgoing_merge"] == ResourceMergeProjection | None
+    forbidden_entities = {
+        Resource,
+        ResourceAlias,
+        ResourceClassification,
+        ResourceIdentifier,
+        ResourceLabel,
+        ResourceMerge,
+        ResourceOwnership,
+        ResourceState,
+    }
+    assert forbidden_entities.isdisjoint(result_hints.values())
+    assert forbidden_entities.isdisjoint(projection_hints.values())
 
 
 def test_resource_list_contracts_expose_explicit_scalar_filters_only() -> None:
@@ -728,6 +786,23 @@ def test_identity_lookup_handlers_do_not_auto_resolve_canonical_resource() -> No
     assert "ResolveCanonicalResourceHandler" not in source
     assert "resource_merges" not in source
     assert "get_outgoing_merge" not in source
+    assert "canonical_resource_id" not in source
+
+
+def test_details_handler_is_query_service_backed_read_only_and_noncanonical() -> None:
+    source = inspect.getsource(GetResourceDetailsHandler)
+
+    assert "resource_queries.get_resource_details" in source
+    assert ".resources." not in source
+    assert ".commit(" not in source
+    assert ".rollback(" not in source
+    assert "get_for_update" not in source
+    assert ".add(" not in source
+    assert ".flush(" not in source
+    assert ".delete(" not in source
+    assert "ResolveCanonicalResource" not in source
+    assert "resolve_canonical" not in source
+    assert "follow_merges" not in source
     assert "canonical_resource_id" not in source
 
 
@@ -817,6 +892,11 @@ def test_repository_protocols_define_expected_signatures() -> None:
     assert alias_lookup_hints["alias_type"] is str
     assert alias_lookup_hints["normalized_value"] is str
     assert alias_lookup_hints["return"] == ResourceAliasLookupProjection | None
+
+    details_hints = get_type_hints(ResourceQueryService.get_resource_details)
+    assert details_hints["tenant_id"] is UUID
+    assert details_hints["resource_id"] is UUID
+    assert details_hints["return"] == ResourceDetailsProjection | None
 
     mutation_methods = (
         (TenantRepository, "add", Tenant),

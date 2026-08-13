@@ -14,6 +14,7 @@ from app.application.errors import EntityNotFoundError
 from app.application.handlers import (
     FindResourceByAliasHandler,
     FindResourceByIdentifierHandler,
+    GetResourceDetailsHandler,
     ListResourcesHandler,
     ResolveCanonicalResourceHandler,
 )
@@ -21,6 +22,7 @@ from app.application.pagination import decode_resource_list_cursor
 from app.application.queries import (
     FindResourceByAliasQuery,
     FindResourceByIdentifierQuery,
+    GetResourceDetailsQuery,
     ListResourcesQuery,
     ResolveCanonicalResourceQuery,
 )
@@ -42,6 +44,7 @@ from app.models import (
     ResourceLabel,
     ResourceMerge,
     ResourceOwnership,
+    ResourceState,
     ResourceType,
     Tenant,
 )
@@ -339,6 +342,37 @@ def _merge(session: Session, source: Resource, target: Resource) -> ResourceMerg
     session.add(merge)
     session.flush()
     return merge
+
+
+def _state(
+    session: Session,
+    resource: Resource,
+    *,
+    lifecycle_status_id: UUID | None = None,
+    criticality_id: UUID | None = None,
+    exposure_level_id: UUID | None = None,
+    valid_from: datetime | None = None,
+    valid_to: datetime | None = None,
+) -> ResourceState:
+    state = ResourceState(
+        tenant_id=resource.tenant_id,
+        resource_id=resource.id,
+        lifecycle_status_id=(
+            lifecycle_status_id or _catalog_id(session, LifecycleStatus, "active")
+        ),
+        criticality_id=criticality_id or _catalog_id(session, Criticality, "medium"),
+        exposure_level_id=(
+            exposure_level_id or _catalog_id(session, ExposureLevel, "public")
+        ),
+        source_priority=90,
+        confidence_score=Decimal("0.9100"),
+        valid_from=valid_from or _now(-1),
+        valid_to=valid_to,
+        source="test",
+    )
+    session.add(state)
+    session.flush()
+    return state
 
 
 @contextmanager
@@ -1869,6 +1903,327 @@ def test_exact_identity_lookups_are_single_projection_queries_and_read_only(
         assert unchanged is not None
         assert unchanged.record_version == resource.record_version
         assert unchanged.updated_at == resource.updated_at
+
+
+def test_resource_details_returns_current_facts_with_fixed_projection_queries(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        other_tenant_id = _seed_tenant(setup, "other-tenant")
+        resource = _resource(setup, tenant_id, _slug("details"), created_at=_now(-30))
+        target = _resource(setup, tenant_id, _slug("target"), created_at=_now(-29))
+        other_resource = _resource(
+            setup,
+            other_tenant_id,
+            _slug("other-resource"),
+            created_at=_now(-30),
+        )
+        organization = _organization(setup, tenant_id, _slug("owner"))
+        custodian = _organization(setup, tenant_id, _slug("custodian"))
+        other_organization = _organization(
+            setup,
+            other_tenant_id,
+            _slug("other-owner"),
+        )
+        labels = [
+            _label(setup, tenant_id, "env", "prod"),
+            _label(setup, tenant_id, "team", "alpha"),
+            _label(setup, tenant_id, "tier", "one"),
+        ]
+        historical_label = _label(setup, tenant_id, "old", "label")
+        other_label = _label(setup, other_tenant_id, "env", "prod")
+        classification_type_id = _classification_type_id(setup)
+        production_id = _classification_value_id(setup, "production")
+        staging_id = _classification_value_id(setup, "staging")
+        identifier_type_id = _identifier_type_id(setup)
+        historical_window = {"valid_from": _now(-40), "valid_to": _now(-20)}
+
+        _state(setup, resource, **historical_window)
+        current_state = _state(setup, resource, valid_from=_now(-10))
+        _ownership(setup, resource, organization, **historical_window)
+        owner = _ownership(setup, resource, organization, is_primary=True)
+        _ownership(
+            setup,
+            resource,
+            custodian,
+            ownership_role_id=_custodian_role_id(setup),
+            is_primary=True,
+        )
+        _label_assignment(setup, resource, historical_label, **historical_window)
+        for label in labels:
+            _label_assignment(setup, resource, label)
+        _classification(
+            setup,
+            resource,
+            classification_value_id=production_id,
+            **historical_window,
+        )
+        current_primary_classification = _classification(
+            setup,
+            resource,
+            classification_type_id=classification_type_id,
+            classification_value_id=production_id,
+            is_primary=True,
+        )
+        current_non_primary_classification = _classification(
+            setup,
+            resource,
+            classification_type_id=classification_type_id,
+            classification_value_id=staging_id,
+            is_primary=False,
+        )
+        _identifier(
+            setup,
+            resource,
+            normalized_value="old.example.com",
+            original_value="OLD.EXAMPLE.COM",
+            value_hash="hash-old.example.com",
+            **historical_window,
+        )
+        _identifier(
+            setup,
+            resource,
+            identifier_type_id=identifier_type_id,
+            namespace=None,
+            normalized_value="a.example.com",
+            original_value="A.EXAMPLE.COM",
+            value_hash="hash-a.example.com",
+            is_primary=True,
+        )
+        _identifier(
+            setup,
+            resource,
+            identifier_type_id=identifier_type_id,
+            namespace="dns",
+            normalized_value="b.example.com",
+            original_value="B.EXAMPLE.COM",
+            value_hash="hash-b.example.com",
+        )
+        _identifier(
+            setup,
+            resource,
+            identifier_type_id=identifier_type_id,
+            namespace="dns",
+            normalized_value="c.example.com",
+            original_value="C.EXAMPLE.COM",
+            value_hash="hash-c.example.com",
+        )
+        _alias(
+            setup,
+            resource,
+            alias_type="dns_name",
+            normalized_value="b.example.com",
+            alias_value="B.EXAMPLE.COM",
+        )
+        _alias(
+            setup,
+            resource,
+            alias_type="dns_name",
+            normalized_value="a.example.com",
+            alias_value="A.EXAMPLE.COM",
+        )
+        _alias(
+            setup,
+            resource,
+            alias_type="hostname",
+            normalized_value="host.example.com",
+            alias_value="HOST.EXAMPLE.COM",
+        )
+        _merge(setup, resource, target)
+
+        _state(setup, other_resource)
+        _ownership(setup, other_resource, other_organization)
+        _label_assignment(setup, other_resource, other_label)
+        _classification(setup, other_resource, classification_value_id=production_id)
+        _identifier(
+            setup,
+            other_resource,
+            normalized_value="a.example.com",
+            value_hash="other-hash-a.example.com",
+        )
+        _alias(setup, other_resource, normalized_value="other.example.com")
+        setup.commit()
+
+    handler = GetResourceDetailsHandler(_uow_factory(SessionLocal))
+    canonical_handler = ResolveCanonicalResourceHandler(_uow_factory(SessionLocal))
+
+    with _capture_sql(migrated_engine) as statements:
+        result = handler.handle(
+            GetResourceDetailsQuery(tenant_id=tenant_id, resource_id=resource.id)
+        )
+
+    selects = [
+        statement for statement in statements if statement.lstrip().upper().startswith("SELECT")
+    ]
+    assert len(selects) == 6
+    sql = "\n".join(selects).upper()
+    assert "RESOURCE_STATE" in sql
+    assert "RESOURCE_OWNERSHIP" in sql
+    assert "RESOURCE_LABEL" in sql
+    assert "RESOURCE_CLASSIFICATION" in sql
+    assert "RESOURCE_IDENTIFIER" in sql
+    assert "RESOURCE_ALIAS" in sql
+    assert "RESOURCE_MERGE" in sql
+    assert sql.count("VALID_TO IS NULL") >= 5
+    assert "OFFSET" not in sql
+    assert "COUNT" not in sql
+    assert "DISTINCT" not in sql
+    assert "RESOURCE_LABEL" not in selects[0].upper()
+    assert "RESOURCE_CLASSIFICATION" not in selects[0].upper()
+    assert "RESOURCE_IDENTIFIER" not in selects[0].upper()
+    assert "RESOURCE_ALIAS" not in selects[0].upper()
+
+    assert result.id == resource.id
+    assert result.organization_id == owner.organization_id
+    assert result.state is not None
+    assert result.state.id == current_state.id
+    assert [item.label_id for item in result.labels] == [label.id for label in labels]
+    assert [item.classification_value_id for item in result.classifications] == [
+        production_id,
+        staging_id,
+    ]
+    assert {
+        item.id for item in result.classifications
+    } == {
+        current_primary_classification.id,
+        current_non_primary_classification.id,
+    }
+    assert [item.normalized_value for item in result.identifiers] == [
+        "a.example.com",
+        "b.example.com",
+        "c.example.com",
+    ]
+    assert [item.namespace for item in result.identifiers] == [None, "dns", "dns"]
+    assert [item.normalized_value for item in result.aliases] == [
+        "a.example.com",
+        "b.example.com",
+        "host.example.com",
+    ]
+    assert result.outgoing_merge is not None
+    assert result.outgoing_merge.target_resource_id == target.id
+    canonical = canonical_handler.handle(
+        ResolveCanonicalResourceQuery(tenant_id=tenant_id, resource_id=resource.id)
+    )
+    assert canonical.canonical_resource_id == target.id
+    assert result.id != canonical.canonical_resource_id
+    assert len({item.id for item in result.labels}) == 3
+    assert len({item.id for item in result.classifications}) == 2
+    assert len({item.id for item in result.identifiers}) == 3
+    assert len({item.id for item in result.aliases}) == 3
+    assert result.canonical_name
+    assert result.labels[0].label_id
+    assert result.identifiers[0].normalized_value
+
+
+def test_resource_details_accepts_resources_without_optional_facts(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        resource = _resource(setup, tenant_id, _slug("empty"), created_at=_now(-5))
+        setup.commit()
+    handler = GetResourceDetailsHandler(_uow_factory(SessionLocal))
+
+    result = handler.handle(
+        GetResourceDetailsQuery(tenant_id=tenant_id, resource_id=resource.id)
+    )
+
+    assert result.id == resource.id
+    assert result.organization_id is None
+    assert result.state is None
+    assert result.identifiers == ()
+    assert result.ownership == ()
+    assert result.classifications == ()
+    assert result.labels == ()
+    assert result.aliases == ()
+    assert result.outgoing_merge is None
+
+
+def test_resource_details_query_count_is_independent_of_collection_size(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        organization = _organization(setup, tenant_id, _slug("owner"))
+        labels = [
+            _label(setup, tenant_id, f"k{index}", f"v{index}")
+            for index in range(10)
+        ]
+        resource = _resource(setup, tenant_id, _slug("dense"), created_at=_now(-5))
+        _state(setup, resource)
+        _ownership(setup, resource, organization)
+        for index, label in enumerate(labels):
+            _label_assignment(setup, resource, label)
+            _identifier(
+                setup,
+                resource,
+                namespace=f"ns-{index}",
+                normalized_value=f"{index}.example.com",
+                original_value=f"{index}.EXAMPLE.COM",
+                value_hash=f"hash-{index}.example.com",
+            )
+            _alias(
+                setup,
+                resource,
+                alias_type="dns_name",
+                normalized_value=f"{index}.alias.example.com",
+                alias_value=f"{index}.ALIAS.EXAMPLE.COM",
+            )
+        _classification(
+            setup,
+            resource,
+            classification_value_id=_classification_value_id(setup, "production"),
+            is_primary=True,
+        )
+        _classification(
+            setup,
+            resource,
+            classification_value_id=_classification_value_id(setup, "staging"),
+            is_primary=False,
+        )
+        setup.commit()
+    handler = GetResourceDetailsHandler(_uow_factory(SessionLocal))
+
+    with _capture_sql(migrated_engine) as statements:
+        result = handler.handle(
+            GetResourceDetailsQuery(tenant_id=tenant_id, resource_id=resource.id)
+        )
+
+    selects = [
+        statement for statement in statements if statement.lstrip().upper().startswith("SELECT")
+    ]
+    assert len(selects) == 6
+    assert len(result.labels) == 10
+    assert len(result.identifiers) == 10
+    assert len(result.aliases) == 10
+    assert len(result.classifications) == 2
+
+
+def test_resource_details_wrong_tenant_matches_missing_resource(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_a = _seed_tenant(setup, "tenant-a")
+        tenant_b = _seed_tenant(setup, "tenant-b")
+        resource_b = _resource(setup, tenant_b, _slug("tenant-b"), created_at=_now(-5))
+        setup.commit()
+    handler = GetResourceDetailsHandler(_uow_factory(SessionLocal))
+
+    with pytest.raises(EntityNotFoundError) as wrong_tenant:
+        handler.handle(
+            GetResourceDetailsQuery(tenant_id=tenant_a, resource_id=resource_b.id)
+        )
+    with pytest.raises(EntityNotFoundError) as missing:
+        handler.handle(GetResourceDetailsQuery(tenant_id=tenant_a, resource_id=uuid4()))
+
+    assert wrong_tenant.value.entity_type == missing.value.entity_type == "Resource"
+    assert wrong_tenant.value.lookup_field == missing.value.lookup_field == "resource_id"
+    assert wrong_tenant.value.lookup_value == resource_b.id
 
 
 def test_empty_page_is_tuple_with_no_next_cursor(migrated_engine: Engine) -> None:

@@ -42,6 +42,8 @@ The first Resource collection query orders Resource rows by `created_at ASC, id 
 
 Resource collection filters are exact and current-state oriented. Optional filters combine with `AND`: resource type, lifecycle status, current primary owner organization, current tenant-scoped label assignment, and current classification. Label filtering uses `resource_label.valid_to IS NULL` and the row tenant; historical label assignments do not match. Classification filtering uses `resource_classification.valid_to IS NULL`; a type-only filter matches any current row for the type, while a type/value filter matches the exact pair. Current non-primary classification rows are eligible. A classification value without a classification type is rejected by application validation. Cursor version `1` remains based only on `created_at` and resource id.
 
+The Resource details read model is anchored by `(tenant_id, resource_id)` and describes the requested stored resource. It returns the current state, current ownership rows, current label assignments, all current classifications including non-primary rows, current identifiers, non-temporal aliases, and immediate outgoing merge metadata when present. Historical temporal facts are excluded. Details reads do not automatically resolve merge lineage to a canonical resource; canonical resolution remains a separate application query.
+
 ### Resource identifier
 
 Resource identifier stores a specific identifier value for a resource, using an identifier type and a normalized representation. Each assignment remains temporally versioned so that the identity evidence can be audited and superseded when required.

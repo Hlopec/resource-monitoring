@@ -28,6 +28,7 @@ from app.application.pagination import (
     encode_resource_list_cursor,
 )
 from app.application.ports import UnitOfWork, UnitOfWorkFactory
+from app.application.ports.resource_queries import ResourceDetailsProjection
 from app.application.queries import (
     FindResourceByAliasQuery,
     FindResourceByIdentifierQuery,
@@ -316,15 +317,18 @@ class GetResourceDetailsHandler:
     def handle(self, query: GetResourceDetailsQuery) -> ResourceDetailsResult:
         """Return a fully materialized details projection for one resource."""
         with self._uow_factory() as uow:
-            resource = uow.resources.get_by_id(query.tenant_id, query.resource_id)
-            if resource is None:
+            projection = uow.resource_queries.get_resource_details(
+                query.tenant_id,
+                query.resource_id,
+            )
+            if projection is None:
                 raise EntityNotFoundError(
                     "Resource not found",
                     entity_type="Resource",
                     lookup_field="resource_id",
                     lookup_value=query.resource_id,
                 )
-            return _build_resource_details_result(uow, resource)
+            return _build_resource_details_result(projection)
 
 
 class GetResourceByCanonicalNameHandler:
@@ -350,7 +354,18 @@ class GetResourceByCanonicalNameHandler:
                     lookup_field="canonical_name",
                     lookup_value=query.canonical_name,
                 )
-            return _build_resource_details_result(uow, resource)
+            projection = uow.resource_queries.get_resource_details(
+                resource.tenant_id,
+                resource.id,
+            )
+            if projection is None:
+                raise EntityNotFoundError(
+                    "Resource not found",
+                    entity_type="Resource",
+                    lookup_field="resource_id",
+                    lookup_value=resource.id,
+                )
+            return _build_resource_details_result(projection)
 
 
 class EnsureResourceExistsHandler:
@@ -1516,87 +1531,30 @@ def _build_resource_read_result(resource: Resource) -> ResourceReadResult:
 
 
 def _build_resource_details_result(
-    uow: UnitOfWork,
-    resource: Resource,
+    projection: ResourceDetailsProjection,
 ) -> ResourceDetailsResult:
-    tenant_id = resource.tenant_id
-    resource_id = resource.id
-    state = uow.resource_states.get_current(tenant_id, resource_id)
-    identifiers = uow.resource_identifiers.get_current_for_resource(
-        tenant_id,
-        resource_id,
-    )
-    identifiers = sorted(
-        identifiers,
-        key=lambda identifier: (
-            str(identifier.identifier_type_id),
-            identifier.namespace or "",
-            identifier.normalized_value,
-            str(identifier.id),
-        ),
-    )
-    ownership = uow.resource_ownerships.get_current_for_resource(
-        tenant_id,
-        resource_id,
-    )
-    ownership = sorted(
-        ownership,
-        key=lambda ownership_row: (
-            str(ownership_row.ownership_role_id),
-            not ownership_row.is_primary,
-            str(ownership_row.organization_id),
-            str(ownership_row.id),
-        ),
-    )
-    classifications = uow.resource_classifications.get_current_for_resource(
-        tenant_id,
-        resource_id,
-    )
-    classifications = sorted(
-        classifications,
-        key=lambda classification: (
-            str(classification.classification_type_id),
-            str(classification.classification_value_id),
-            str(classification.id),
-        ),
-    )
-    labels = uow.resource_labels.get_current_for_resource(tenant_id, resource_id)
-    labels = sorted(labels, key=lambda label: (str(label.label_id), str(label.id)))
-    aliases = uow.resource_aliases.list_for_resource(tenant_id, resource_id)
-    aliases = sorted(
-        aliases,
-        key=lambda alias: (alias.alias_type, alias.normalized_value, str(alias.id)),
-    )
-    outgoing_merge = uow.resource_merges.get_outgoing_merge(tenant_id, resource_id)
-    primary_ownership = next(
-        (ownership_row for ownership_row in ownership if ownership_row.is_primary),
-        None,
-    )
-
     return ResourceDetailsResult(
-        id=resource.id,
-        tenant_id=resource.tenant_id,
-        organization_id=(
-            primary_ownership.organization_id if primary_ownership is not None else None
-        ),
-        resource_type_id=resource.resource_type_id,
-        canonical_name=resource.canonical_name,
-        display_name=resource.display_name,
-        record_version=resource.record_version,
-        created_at=resource.created_at,
-        updated_at=resource.updated_at,
+        id=projection.id,
+        tenant_id=projection.tenant_id,
+        organization_id=projection.organization_id,
+        resource_type_id=projection.resource_type_id,
+        canonical_name=projection.canonical_name,
+        display_name=projection.display_name,
+        record_version=projection.record_version,
+        created_at=projection.created_at,
+        updated_at=projection.updated_at,
         state=(
             ResourceStateResult(
-                id=state.id,
-                lifecycle_status_id=state.lifecycle_status_id,
-                criticality_id=state.criticality_id,
-                exposure_level_id=state.exposure_level_id,
-                source_priority=state.source_priority,
-                confidence_score=state.confidence_score,
-                valid_from=state.valid_from,
-                source=state.source,
+                id=projection.state.id,
+                lifecycle_status_id=projection.state.lifecycle_status_id,
+                criticality_id=projection.state.criticality_id,
+                exposure_level_id=projection.state.exposure_level_id,
+                source_priority=projection.state.source_priority,
+                confidence_score=projection.state.confidence_score,
+                valid_from=projection.state.valid_from,
+                source=projection.state.source,
             )
-            if state is not None
+            if projection.state is not None
             else None
         ),
         identifiers=tuple(
@@ -1610,7 +1568,7 @@ def _build_resource_details_result(
                 confidence_score=identifier.confidence_score,
                 valid_from=identifier.valid_from,
             )
-            for identifier in identifiers
+            for identifier in projection.identifiers
         ),
         ownership=tuple(
             ResourceOwnershipResult(
@@ -1622,7 +1580,7 @@ def _build_resource_details_result(
                 valid_from=ownership_row.valid_from,
                 source=ownership_row.source,
             )
-            for ownership_row in ownership
+            for ownership_row in projection.ownership
         ),
         classifications=tuple(
             ResourceClassificationResult(
@@ -1634,7 +1592,7 @@ def _build_resource_details_result(
                 valid_from=classification.valid_from,
                 source=classification.source,
             )
-            for classification in classifications
+            for classification in projection.classifications
         ),
         labels=tuple(
             ResourceLabelResult(
@@ -1643,7 +1601,7 @@ def _build_resource_details_result(
                 valid_from=label.valid_from,
                 source=label.source,
             )
-            for label in labels
+            for label in projection.labels
         ),
         aliases=tuple(
             ResourceAliasResult(
@@ -1655,18 +1613,18 @@ def _build_resource_details_result(
                 first_seen_at=alias.first_seen_at,
                 last_seen_at=alias.last_seen_at,
             )
-            for alias in aliases
+            for alias in projection.aliases
         ),
         outgoing_merge=(
             ResourceMergeResult(
-                id=outgoing_merge.id,
-                source_resource_id=outgoing_merge.source_resource_id,
-                target_resource_id=outgoing_merge.target_resource_id,
-                reason=outgoing_merge.reason,
-                source=outgoing_merge.source,
-                merged_at=outgoing_merge.merged_at,
+                id=projection.outgoing_merge.id,
+                source_resource_id=projection.outgoing_merge.source_resource_id,
+                target_resource_id=projection.outgoing_merge.target_resource_id,
+                reason=projection.outgoing_merge.reason,
+                source=projection.outgoing_merge.source,
+                merged_at=projection.outgoing_merge.merged_at,
             )
-            if outgoing_merge is not None
+            if projection.outgoing_merge is not None
             else None
         ),
     )
