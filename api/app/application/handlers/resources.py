@@ -96,6 +96,9 @@ class ListResourcesHandler:
                 resource_type_id=query.resource_type_id,
                 lifecycle_status_id=query.lifecycle_status_id,
                 organization_id=query.organization_id,
+                label_id=query.label_id,
+                classification_type_id=query.classification_type_id,
+                classification_value_id=query.classification_value_id,
                 after=after,
                 limit=query.page_size,
             )
@@ -1140,25 +1143,35 @@ def _validate_create_resource_command(command: CreateResourceCommand) -> None:
 
 
 def _validate_list_resources_query(query: ListResourcesQuery) -> None:
+    failures: list[ValidationFailure] = []
     if query.page_size < MIN_RESOURCE_PAGE_SIZE:
-        raise ValidationError(
-            "Invalid resource list query",
-            failures=(
-                ValidationFailure(
-                    "page_size",
-                    f"must be at least {MIN_RESOURCE_PAGE_SIZE}",
-                ),
-            ),
+        failures.append(
+            ValidationFailure(
+                "page_size",
+                f"must be at least {MIN_RESOURCE_PAGE_SIZE}",
+            )
         )
     if query.page_size > MAX_RESOURCE_PAGE_SIZE:
+        failures.append(
+            ValidationFailure(
+                "page_size",
+                f"must be at most {MAX_RESOURCE_PAGE_SIZE}",
+            )
+        )
+    if (
+        query.classification_value_id is not None
+        and query.classification_type_id is None
+    ):
+        failures.append(
+            ValidationFailure(
+                "classification_value_id",
+                "requires classification_type_id",
+            )
+        )
+    if failures:
         raise ValidationError(
             "Invalid resource list query",
-            failures=(
-                ValidationFailure(
-                    "page_size",
-                    f"must be at most {MAX_RESOURCE_PAGE_SIZE}",
-                ),
-            ),
+            failures=tuple(failures),
         )
 
 

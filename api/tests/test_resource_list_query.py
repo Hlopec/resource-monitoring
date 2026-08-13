@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.application.errors import ValidationError
+from app.application.errors import ValidationError, ValidationFailure
 from app.application.handlers import ListResourcesHandler
 from app.application.pagination import (
     ResourceListCursor,
@@ -44,6 +44,9 @@ class FakeResourceQueryService:
         resource_type_id: UUID | None,
         lifecycle_status_id: UUID | None,
         organization_id: UUID | None,
+        label_id: UUID | None,
+        classification_type_id: UUID | None,
+        classification_value_id: UUID | None,
         after: ResourceListCursor | None,
         limit: int,
     ) -> object:
@@ -54,6 +57,9 @@ class FakeResourceQueryService:
                 "resource_type_id": resource_type_id,
                 "lifecycle_status_id": lifecycle_status_id,
                 "organization_id": organization_id,
+                "label_id": label_id,
+                "classification_type_id": classification_type_id,
+                "classification_value_id": classification_value_id,
                 "after": after,
                 "limit": limit,
             }
@@ -156,6 +162,9 @@ def test_list_resources_query_is_frozen_data_only() -> None:
         "resource_type_id",
         "lifecycle_status_id",
         "organization_id",
+        "label_id",
+        "classification_type_id",
+        "classification_value_id",
         "page_size",
         "cursor",
     }
@@ -230,6 +239,27 @@ def test_page_size_above_maximum_fails_before_unit_of_work_creation() -> None:
     assert factory.created == []
 
 
+def test_classification_value_without_type_fails_before_unit_of_work_creation() -> None:
+    factory = FakeUnitOfWorkFactory()
+    handler = ListResourcesHandler(factory)
+
+    with pytest.raises(ValidationError) as exc_info:
+        handler.handle(
+            ListResourcesQuery(
+                tenant_id=uuid4(),
+                classification_value_id=uuid4(),
+            )
+        )
+
+    assert exc_info.value.failures == (
+        ValidationFailure(
+            "classification_value_id",
+            "requires classification_type_id",
+        ),
+    )
+    assert factory.created == []
+
+
 def test_list_resources_handler_is_read_only_and_materializes_page() -> None:
     tenant_id = uuid4()
     item = _summary(tenant_id=tenant_id)
@@ -275,6 +305,9 @@ def test_handler_passes_decoded_cursor_and_all_filters_to_query_service() -> Non
     resource_type_id = uuid4()
     lifecycle_status_id = uuid4()
     organization_id = uuid4()
+    label_id = uuid4()
+    classification_type_id = uuid4()
+    classification_value_id = uuid4()
     position = ResourceListCursor(datetime.now(UTC), uuid4())
     cursor = encode_resource_list_cursor(position)
     uow = FakeUnitOfWork()
@@ -286,6 +319,9 @@ def test_handler_passes_decoded_cursor_and_all_filters_to_query_service() -> Non
             resource_type_id=resource_type_id,
             lifecycle_status_id=lifecycle_status_id,
             organization_id=organization_id,
+            label_id=label_id,
+            classification_type_id=classification_type_id,
+            classification_value_id=classification_value_id,
             page_size=25,
             cursor=cursor,
         )
@@ -298,6 +334,9 @@ def test_handler_passes_decoded_cursor_and_all_filters_to_query_service() -> Non
             "resource_type_id": resource_type_id,
             "lifecycle_status_id": lifecycle_status_id,
             "organization_id": organization_id,
+            "label_id": label_id,
+            "classification_type_id": classification_type_id,
+            "classification_value_id": classification_value_id,
             "after": position,
             "limit": 25,
         }

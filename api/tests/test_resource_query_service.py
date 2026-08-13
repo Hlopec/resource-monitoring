@@ -29,12 +29,17 @@ from app.models import (
     Criticality,
     ExposureLevel,
     IdentifierType,
+    ClassificationType,
+    ClassificationValue,
+    Label,
     LifecycleStatus,
     Organization,
     OwnershipRole,
     Resource,
     ResourceAlias,
+    ResourceClassification,
     ResourceIdentifier,
+    ResourceLabel,
     ResourceMerge,
     ResourceOwnership,
     ResourceType,
@@ -156,6 +161,85 @@ def _owner_role_id(session: Session) -> UUID:
 
 def _custodian_role_id(session: Session) -> UUID:
     return _catalog_id(session, OwnershipRole, "custodian")
+
+
+def _classification_type_id(session: Session, code: str = "environment") -> UUID:
+    return _catalog_id(session, ClassificationType, code)
+
+
+def _classification_value_id(session: Session, code: str) -> UUID:
+    entity_id = session.scalar(
+        select(ClassificationValue.id).where(ClassificationValue.code == code)
+    )
+    assert entity_id is not None
+    return entity_id
+
+
+def _label(session: Session, tenant_id: UUID, key: str, value: str) -> Label:
+    label = Label(
+        tenant_id=tenant_id,
+        key=key,
+        value=value,
+        display_name=f"{key}:{value}",
+        description=None,
+        color=None,
+        is_active=True,
+    )
+    session.add(label)
+    session.flush()
+    return label
+
+
+def _label_assignment(
+    session: Session,
+    resource: Resource,
+    label: Label,
+    *,
+    valid_from: datetime | None = None,
+    valid_to: datetime | None = None,
+) -> ResourceLabel:
+    assignment = ResourceLabel(
+        tenant_id=resource.tenant_id,
+        resource_id=resource.id,
+        label_id=label.id,
+        valid_from=valid_from or _now(-1),
+        valid_to=valid_to,
+        source="test",
+    )
+    session.add(assignment)
+    session.flush()
+    return assignment
+
+
+def _classification(
+    session: Session,
+    resource: Resource,
+    *,
+    classification_type_id: UUID | None = None,
+    classification_value_id: UUID | None = None,
+    is_primary: bool = False,
+    valid_from: datetime | None = None,
+    valid_to: datetime | None = None,
+) -> ResourceClassification:
+    classification_type_id = classification_type_id or _classification_type_id(session)
+    classification_value_id = classification_value_id or _classification_value_id(
+        session,
+        "production",
+    )
+    classification = ResourceClassification(
+        tenant_id=resource.tenant_id,
+        resource_id=resource.id,
+        classification_type_id=classification_type_id,
+        classification_value_id=classification_value_id,
+        is_primary=is_primary,
+        confidence_score=Decimal("0.9000"),
+        valid_from=valid_from or _now(-1),
+        valid_to=valid_to,
+        source="test",
+    )
+    session.add(classification)
+    session.flush()
+    return classification
 
 
 def _ownership(
@@ -300,6 +384,9 @@ def test_sqlalchemy_query_service_orders_by_created_at_then_id_with_ties(
             resource_type_id=None,
             lifecycle_status_id=None,
             organization_id=None,
+            label_id=None,
+            classification_type_id=None,
+            classification_value_id=None,
             after=None,
             limit=10,
         )
@@ -795,6 +882,594 @@ def test_organization_filter_is_tenant_scoped(
 
     assert wrong_tenant_page.items == ()
     assert [item.resource_id for item in tenant_b_page.items] == [resource_b.id]
+
+
+def test_label_filter_matches_current_assignments_without_duplicates(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        label_x = _label(setup, tenant_id, "environment", _slug("prod"))
+        label_y = _label(setup, tenant_id, "owner", _slug("platform"))
+        wrong_label = _label(setup, tenant_id, "environment", _slug("stage"))
+        historical_only = _resource(
+            setup,
+            tenant_id,
+            _slug("historical-label"),
+            created_at=_now(-10),
+        )
+        matching = _resource(setup, tenant_id, _slug("label-match"), created_at=_now(-9))
+        wrong = _resource(setup, tenant_id, _slug("wrong-label"), created_at=_now(-8))
+        no_labels = _resource(setup, tenant_id, _slug("no-label"), created_at=_now(-7))
+        _label_assignment(
+            setup,
+            historical_only,
+            label_x,
+            valid_from=_now(-30),
+            valid_to=_now(-20),
+        )
+        _label_assignment(setup, matching, label_x)
+        _label_assignment(setup, matching, label_y)
+        _label_assignment(setup, wrong, wrong_label)
+        setup.commit()
+    handler = ListResourcesHandler(_uow_factory(SessionLocal))
+
+    filtered = handler.handle(ListResourcesQuery(tenant_id=tenant_id, label_id=label_x.id))
+    unfiltered = handler.handle(ListResourcesQuery(tenant_id=tenant_id))
+
+    assert [item.resource_id for item in filtered.items] == [matching.id]
+    assert len(filtered.items) == len({item.resource_id for item in filtered.items})
+    assert no_labels.id in {item.resource_id for item in unfiltered.items}
+
+
+def test_label_filter_is_tenant_scoped_and_composes_with_other_filters(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_a = _seed_tenant(setup, "tenant-a")
+        tenant_b = _seed_tenant(setup, "tenant-b")
+        label_a = _label(setup, tenant_a, "team", _slug("a"))
+        label_b = _label(setup, tenant_b, "team", _slug("b"))
+        org = _organization(setup, tenant_b, _slug("org"))
+        wrong_org = _organization(setup, tenant_b, _slug("wrong-org"))
+        match = _resource(
+            setup,
+            tenant_b,
+            _slug("label-all-match"),
+            created_at=_now(-10),
+            resource_type_code="ip",
+            lifecycle_status_code="inactive",
+        )
+        wrong_type = _resource(
+            setup,
+            tenant_b,
+            _slug("label-wrong-type"),
+            created_at=_now(-9),
+            resource_type_code="domain",
+            lifecycle_status_code="inactive",
+        )
+        wrong_status = _resource(
+            setup,
+            tenant_b,
+            _slug("label-wrong-status"),
+            created_at=_now(-8),
+            resource_type_code="ip",
+            lifecycle_status_code="active",
+        )
+        wrong_owner = _resource(
+            setup,
+            tenant_b,
+            _slug("label-wrong-owner"),
+            created_at=_now(-7),
+            resource_type_code="ip",
+            lifecycle_status_code="inactive",
+        )
+        _label_assignment(setup, match, label_b)
+        _label_assignment(setup, wrong_type, label_b)
+        _label_assignment(setup, wrong_status, label_b)
+        _label_assignment(setup, wrong_owner, label_b)
+        _ownership(setup, match, org)
+        _ownership(setup, wrong_type, org)
+        _ownership(setup, wrong_status, org)
+        _ownership(setup, wrong_owner, wrong_org)
+        resource_type_id = _catalog_id(setup, ResourceType, "ip")
+        lifecycle_status_id = _catalog_id(setup, LifecycleStatus, "inactive")
+        setup.commit()
+    handler = ListResourcesHandler(_uow_factory(SessionLocal))
+
+    cross_tenant = handler.handle(ListResourcesQuery(tenant_id=tenant_b, label_id=label_a.id))
+    composed = handler.handle(
+        ListResourcesQuery(
+            tenant_id=tenant_b,
+            resource_type_id=resource_type_id,
+            lifecycle_status_id=lifecycle_status_id,
+            organization_id=org.id,
+            label_id=label_b.id,
+        )
+    )
+
+    assert cross_tenant.items == ()
+    assert [item.resource_id for item in composed.items] == [match.id]
+
+
+def test_label_filter_keyset_pagination_skips_nonmatches(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        label = _label(setup, tenant_id, "segment", _slug("x"))
+        matches: list[Resource] = []
+        start = _now(-20)
+        for index in range(7):
+            resource = _resource(
+                setup,
+                tenant_id,
+                _slug(f"label-page-{index}"),
+                created_at=start + timedelta(minutes=index),
+            )
+            if index % 2 == 0:
+                _label_assignment(setup, resource, label)
+                matches.append(resource)
+        expected_ids = _expected_order(matches)
+        setup.commit()
+    handler = ListResourcesHandler(_uow_factory(SessionLocal))
+
+    first_page = handler.handle(
+        ListResourcesQuery(tenant_id=tenant_id, label_id=label.id, page_size=2)
+    )
+    second_page = handler.handle(
+        ListResourcesQuery(
+            tenant_id=tenant_id,
+            label_id=label.id,
+            page_size=2,
+            cursor=first_page.next_cursor,
+        )
+    )
+
+    assert [item.resource_id for item in first_page.items] == expected_ids[:2]
+    assert [item.resource_id for item in second_page.items] == expected_ids[2:]
+    assert second_page.next_cursor is None
+
+
+def test_classification_filter_matches_current_type_and_value_semantics(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        classification_type_id = _classification_type_id(setup)
+        production_id = _classification_value_id(setup, "production")
+        staging_id = _classification_value_id(setup, "staging")
+        historical_only = _resource(
+            setup,
+            tenant_id,
+            _slug("historical-class"),
+            created_at=_now(-10),
+        )
+        current_non_primary = _resource(
+            setup,
+            tenant_id,
+            _slug("current-non-primary"),
+            created_at=_now(-9),
+        )
+        current_staging = _resource(
+            setup,
+            tenant_id,
+            _slug("current-staging"),
+            created_at=_now(-8),
+        )
+        no_classification = _resource(
+            setup,
+            tenant_id,
+            _slug("no-classification"),
+            created_at=_now(-7),
+        )
+        _classification(
+            setup,
+            historical_only,
+            classification_type_id=classification_type_id,
+            classification_value_id=production_id,
+            valid_from=_now(-30),
+            valid_to=_now(-20),
+        )
+        _classification(
+            setup,
+            current_non_primary,
+            classification_type_id=classification_type_id,
+            classification_value_id=production_id,
+            is_primary=False,
+        )
+        _classification(
+            setup,
+            current_staging,
+            classification_type_id=classification_type_id,
+            classification_value_id=staging_id,
+        )
+        setup.commit()
+    handler = ListResourcesHandler(_uow_factory(SessionLocal))
+
+    type_only = handler.handle(
+        ListResourcesQuery(
+            tenant_id=tenant_id,
+            classification_type_id=classification_type_id,
+        )
+    )
+    type_and_value = handler.handle(
+        ListResourcesQuery(
+            tenant_id=tenant_id,
+            classification_type_id=classification_type_id,
+            classification_value_id=production_id,
+        )
+    )
+    unfiltered = handler.handle(ListResourcesQuery(tenant_id=tenant_id))
+
+    assert [item.resource_id for item in type_only.items] == _expected_order(
+        [current_non_primary, current_staging]
+    )
+    assert [item.resource_id for item in type_and_value.items] == [
+        current_non_primary.id
+    ]
+    assert no_classification.id in {item.resource_id for item in unfiltered.items}
+
+
+def test_classification_historical_replacement_and_multiple_rows_do_not_duplicate(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        classification_type_id = _classification_type_id(setup)
+        production_id = _classification_value_id(setup, "production")
+        staging_id = _classification_value_id(setup, "staging")
+        resource = _resource(
+            setup,
+            tenant_id,
+            _slug("classification-replacement"),
+            created_at=_now(-10),
+        )
+        _classification(
+            setup,
+            resource,
+            classification_type_id=classification_type_id,
+            classification_value_id=production_id,
+            valid_from=_now(-30),
+            valid_to=_now(-20),
+        )
+        _classification(
+            setup,
+            resource,
+            classification_type_id=classification_type_id,
+            classification_value_id=staging_id,
+            valid_from=_now(-20),
+        )
+        setup.commit()
+    handler = ListResourcesHandler(_uow_factory(SessionLocal))
+
+    old_value = handler.handle(
+        ListResourcesQuery(
+            tenant_id=tenant_id,
+            classification_type_id=classification_type_id,
+            classification_value_id=production_id,
+        )
+    )
+    current_value = handler.handle(
+        ListResourcesQuery(
+            tenant_id=tenant_id,
+            classification_type_id=classification_type_id,
+            classification_value_id=staging_id,
+        )
+    )
+    type_only = handler.handle(
+        ListResourcesQuery(
+            tenant_id=tenant_id,
+            classification_type_id=classification_type_id,
+        )
+    )
+
+    assert old_value.items == ()
+    assert [item.resource_id for item in current_value.items] == [resource.id]
+    assert [item.resource_id for item in type_only.items] == [resource.id]
+
+
+def test_classification_filter_tenant_scope_pagination_and_composition(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_a = _seed_tenant(setup, "tenant-a")
+        tenant_b = _seed_tenant(setup, "tenant-b")
+        classification_type_id = _classification_type_id(setup)
+        production_id = _classification_value_id(setup, "production")
+        staging_id = _classification_value_id(setup, "staging")
+        tenant_a_resource = _resource(
+            setup,
+            tenant_a,
+            _slug("classification-tenant-a"),
+            created_at=_now(-12),
+        )
+        _classification(
+            setup,
+            tenant_a_resource,
+            classification_type_id=classification_type_id,
+            classification_value_id=production_id,
+        )
+        org = _organization(setup, tenant_b, _slug("classification-org"))
+        wrong_org = _organization(setup, tenant_b, _slug("classification-wrong-org"))
+        matches: list[Resource] = []
+        start = _now(-10)
+        for index in range(7):
+            resource = _resource(
+                setup,
+                tenant_b,
+                _slug(f"classification-page-{index}"),
+                created_at=start + timedelta(minutes=index),
+                resource_type_code="ip",
+                lifecycle_status_code="inactive",
+            )
+            if index % 2 == 0:
+                _classification(
+                    setup,
+                    resource,
+                    classification_type_id=classification_type_id,
+                    classification_value_id=production_id,
+                )
+                _ownership(setup, resource, org)
+                matches.append(resource)
+            else:
+                _classification(
+                    setup,
+                    resource,
+                    classification_type_id=classification_type_id,
+                    classification_value_id=staging_id,
+                )
+                _ownership(setup, resource, wrong_org)
+        expected_ids = _expected_order(matches)
+        resource_type_id = _catalog_id(setup, ResourceType, "ip")
+        lifecycle_status_id = _catalog_id(setup, LifecycleStatus, "inactive")
+        setup.commit()
+    handler = ListResourcesHandler(_uow_factory(SessionLocal))
+
+    tenant_a_page = handler.handle(
+        ListResourcesQuery(
+            tenant_id=tenant_a,
+            classification_type_id=classification_type_id,
+            classification_value_id=production_id,
+        )
+    )
+    first_page = handler.handle(
+        ListResourcesQuery(
+            tenant_id=tenant_b,
+            resource_type_id=resource_type_id,
+            lifecycle_status_id=lifecycle_status_id,
+            organization_id=org.id,
+            classification_type_id=classification_type_id,
+            classification_value_id=production_id,
+            page_size=2,
+        )
+    )
+    second_page = handler.handle(
+        ListResourcesQuery(
+            tenant_id=tenant_b,
+            resource_type_id=resource_type_id,
+            lifecycle_status_id=lifecycle_status_id,
+            organization_id=org.id,
+            classification_type_id=classification_type_id,
+            classification_value_id=production_id,
+            page_size=2,
+            cursor=first_page.next_cursor,
+        )
+    )
+
+    assert [item.resource_id for item in tenant_a_page.items] == [tenant_a_resource.id]
+    assert [item.resource_id for item in first_page.items] == expected_ids[:2]
+    assert [item.resource_id for item in second_page.items] == expected_ids[2:]
+    assert second_page.next_cursor is None
+
+
+def test_all_resource_list_filters_compose_with_and_semantics(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        label = _label(setup, tenant_id, "tier", _slug("critical"))
+        wrong_label = _label(setup, tenant_id, "tier", _slug("standard"))
+        classification_type_id = _classification_type_id(setup)
+        production_id = _classification_value_id(setup, "production")
+        staging_id = _classification_value_id(setup, "staging")
+        org = _organization(setup, tenant_id, _slug("full-org"))
+        wrong_org = _organization(setup, tenant_id, _slug("full-wrong-org"))
+        match = _resource(
+            setup,
+            tenant_id,
+            _slug("full-match"),
+            created_at=_now(-10),
+            resource_type_code="ip",
+            lifecycle_status_code="inactive",
+        )
+        wrong_type = _resource(
+            setup,
+            tenant_id,
+            _slug("full-wrong-type"),
+            created_at=_now(-9),
+            resource_type_code="domain",
+            lifecycle_status_code="inactive",
+        )
+        wrong_lifecycle = _resource(
+            setup,
+            tenant_id,
+            _slug("full-wrong-lifecycle"),
+            created_at=_now(-8),
+            resource_type_code="ip",
+            lifecycle_status_code="active",
+        )
+        wrong_org_resource = _resource(
+            setup,
+            tenant_id,
+            _slug("full-wrong-org"),
+            created_at=_now(-7),
+            resource_type_code="ip",
+            lifecycle_status_code="inactive",
+        )
+        wrong_label_resource = _resource(
+            setup,
+            tenant_id,
+            _slug("full-wrong-label"),
+            created_at=_now(-6),
+            resource_type_code="ip",
+            lifecycle_status_code="inactive",
+        )
+        wrong_classification_value = _resource(
+            setup,
+            tenant_id,
+            _slug("full-wrong-classification-value"),
+            created_at=_now(-5),
+            resource_type_code="ip",
+            lifecycle_status_code="inactive",
+        )
+        for resource in (
+            match,
+            wrong_type,
+            wrong_lifecycle,
+        ):
+            _ownership(setup, resource, org)
+            _label_assignment(setup, resource, label)
+            _classification(
+                setup,
+                resource,
+                classification_type_id=classification_type_id,
+                classification_value_id=production_id,
+            )
+        _ownership(setup, wrong_org_resource, wrong_org)
+        _label_assignment(setup, wrong_org_resource, label)
+        _classification(
+            setup,
+            wrong_org_resource,
+            classification_type_id=classification_type_id,
+            classification_value_id=production_id,
+        )
+        _ownership(setup, wrong_label_resource, org)
+        _label_assignment(setup, wrong_label_resource, wrong_label)
+        _classification(
+            setup,
+            wrong_label_resource,
+            classification_type_id=classification_type_id,
+            classification_value_id=production_id,
+        )
+        _ownership(setup, wrong_classification_value, org)
+        _label_assignment(setup, wrong_classification_value, label)
+        _classification(
+            setup,
+            wrong_classification_value,
+            classification_type_id=classification_type_id,
+            classification_value_id=staging_id,
+        )
+        resource_type_id = _catalog_id(setup, ResourceType, "ip")
+        lifecycle_status_id = _catalog_id(setup, LifecycleStatus, "inactive")
+        setup.commit()
+    handler = ListResourcesHandler(_uow_factory(SessionLocal))
+
+    page = handler.handle(
+        ListResourcesQuery(
+            tenant_id=tenant_id,
+            resource_type_id=resource_type_id,
+            lifecycle_status_id=lifecycle_status_id,
+            organization_id=org.id,
+            label_id=label.id,
+            classification_type_id=classification_type_id,
+            classification_value_id=production_id,
+        )
+    )
+
+    assert [item.resource_id for item in page.items] == [match.id]
+
+
+def test_label_and_classification_filter_sql_shape(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        label = _label(setup, tenant_id, "shape", _slug("label"))
+        classification_type_id = _classification_type_id(setup)
+        production_id = _classification_value_id(setup, "production")
+        resource = _resource(setup, tenant_id, _slug("shape-resource"), created_at=_now(-5))
+        _label_assignment(setup, resource, label)
+        _classification(
+            setup,
+            resource,
+            classification_type_id=classification_type_id,
+            classification_value_id=production_id,
+        )
+        setup.commit()
+    handler = ListResourcesHandler(_uow_factory(SessionLocal))
+
+    with _capture_sql(migrated_engine) as statements:
+        page = handler.handle(
+            ListResourcesQuery(
+                tenant_id=tenant_id,
+                label_id=label.id,
+                classification_type_id=classification_type_id,
+                classification_value_id=production_id,
+            )
+        )
+
+    select_statements = [
+        statement for statement in statements if statement.lstrip().upper().startswith("SELECT")
+    ]
+    assert len(select_statements) == 1
+    sql = select_statements[0].upper()
+    assert "EXISTS" in sql
+    assert "RESOURCE_LABEL" in sql
+    assert "RESOURCE_CLASSIFICATION" in sql
+    assert "LABEL_ID" in sql
+    assert "CLASSIFICATION_TYPE_ID" in sql
+    assert "CLASSIFICATION_VALUE_ID" in sql
+    assert "VALID_TO IS NULL" in sql
+    assert "OFFSET" not in sql
+    assert "COUNT" not in sql
+    assert "DISTINCT" not in sql
+    assert [item.resource_id for item in page.items] == [resource.id]
+
+
+def test_classification_type_only_sql_omits_value_predicate(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_id = _seed_tenant(setup)
+        classification_type_id = _classification_type_id(setup)
+        resource = _resource(
+            setup,
+            tenant_id,
+            _slug("type-only-shape"),
+            created_at=_now(-5),
+        )
+        _classification(setup, resource, classification_type_id=classification_type_id)
+        setup.commit()
+    handler = ListResourcesHandler(_uow_factory(SessionLocal))
+
+    with _capture_sql(migrated_engine) as statements:
+        page = handler.handle(
+            ListResourcesQuery(
+                tenant_id=tenant_id,
+                classification_type_id=classification_type_id,
+            )
+        )
+
+    sql = "\n".join(
+        statement for statement in statements if statement.lstrip().upper().startswith("SELECT")
+    ).upper()
+    assert "RESOURCE_CLASSIFICATION" in sql
+    assert "CLASSIFICATION_TYPE_ID" in sql
+    assert "CLASSIFICATION_VALUE_ID =" not in sql
+    assert "OFFSET" not in sql
+    assert "COUNT" not in sql
+    assert "DISTINCT" not in sql
+    assert [item.resource_id for item in page.items] == [resource.id]
 
 
 def test_identifier_lookup_matches_exact_current_identifier(

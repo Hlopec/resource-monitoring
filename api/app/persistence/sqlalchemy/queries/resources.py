@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.orm import Session
 
 from app.application.pagination import ResourceListCursor
@@ -15,7 +15,14 @@ from app.application.ports.resource_queries import (
     ResourceQueryService,
     ResourceSummaryProjection,
 )
-from app.models import Resource, ResourceAlias, ResourceIdentifier, ResourceOwnership
+from app.models import (
+    Resource,
+    ResourceAlias,
+    ResourceClassification,
+    ResourceIdentifier,
+    ResourceLabel,
+    ResourceOwnership,
+)
 
 PRIMARY_OWNER_ROLE_ID = UUID("01984000-0000-7000-8000-000000000301")
 
@@ -137,6 +144,9 @@ class SQLAlchemyResourceQueryService(ResourceQueryService):
         resource_type_id: UUID | None,
         lifecycle_status_id: UUID | None,
         organization_id: UUID | None,
+        label_id: UUID | None,
+        classification_type_id: UUID | None,
+        classification_value_id: UUID | None,
         after: ResourceListCursor | None,
         limit: int,
     ) -> ResourceQueryPage:
@@ -175,6 +185,33 @@ class SQLAlchemyResourceQueryService(ResourceQueryService):
             statement = statement.where(
                 ResourceOwnership.organization_id == organization_id
             )
+        if label_id is not None:
+            statement = statement.where(
+                exists()
+                .where(
+                    ResourceLabel.tenant_id == tenant_id,
+                    ResourceLabel.tenant_id == Resource.tenant_id,
+                    ResourceLabel.resource_id == Resource.id,
+                    ResourceLabel.label_id == label_id,
+                    ResourceLabel.valid_to.is_(None),
+                )
+                .correlate(Resource)
+            )
+        if classification_type_id is not None:
+            classification_filter = exists().where(
+                ResourceClassification.tenant_id == tenant_id,
+                ResourceClassification.tenant_id == Resource.tenant_id,
+                ResourceClassification.resource_id == Resource.id,
+                ResourceClassification.classification_type_id
+                == classification_type_id,
+                ResourceClassification.valid_to.is_(None),
+            )
+            if classification_value_id is not None:
+                classification_filter = classification_filter.where(
+                    ResourceClassification.classification_value_id
+                    == classification_value_id
+                )
+            statement = statement.where(classification_filter.correlate(Resource))
         if after is not None:
             statement = statement.where(
                 or_(
