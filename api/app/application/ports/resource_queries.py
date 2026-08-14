@@ -266,6 +266,30 @@ class ResourceHistoryProjection:
     identifiers: tuple[ResourceIdentifierHistoryProjection, ...]
 
 
+@dataclass(frozen=True)
+class ResourceRelationshipProjection:
+    """Technology-neutral current one-hop Resource relationship row."""
+
+    id: UUID
+    relationship_type_id: UUID
+    source_resource_id: UUID
+    target_resource_id: UUID
+    direction: str
+    confidence_score: Decimal
+    valid_from: datetime
+    source: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class ResourceRelationshipsProjection:
+    """Technology-neutral direct Resource relationship read model."""
+
+    resource_id: UUID
+    tenant_id: UUID
+    relationships: tuple[ResourceRelationshipProjection, ...]
+
+
 class ResourceQueryService(Protocol):
     """Tenant-scoped read service for Resource collection projections."""
 
@@ -320,4 +344,12 @@ class ResourceQueryService(Protocol):
         resource_id: UUID,
     ) -> ResourceHistoryProjection | None:
         """Return one fully materialized Resource temporal history projection."""
+        ...
+
+    def get_resource_relationships(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+    ) -> ResourceRelationshipsProjection | None:
+        """Return current direct relationships for one stored Resource."""
         ...

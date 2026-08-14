@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import and_, exists, nulls_last, or_, select
+from sqlalchemy import and_, case, exists, nulls_last, or_, select
 from sqlalchemy.orm import Session
 
 from app.application.pagination import ResourceListCursor
@@ -25,6 +25,8 @@ from app.application.ports.resource_queries import (
     ResourceOwnershipProjection,
     ResourceQueryPage,
     ResourceQueryService,
+    ResourceRelationshipProjection,
+    ResourceRelationshipsProjection,
     ResourceStateHistoryProjection,
     ResourceStateProjection,
     ResourceSummaryProjection,
@@ -38,6 +40,7 @@ from app.models import (
     ResourceLabel,
     ResourceMerge,
     ResourceOwnership,
+    ResourceRelationship,
     ResourceState,
 )
 
@@ -426,6 +429,70 @@ class SQLAlchemyResourceQueryService(ResourceQueryService):
             labels=self._list_label_history(tenant_id, resource_id),
             classifications=self._list_classification_history(tenant_id, resource_id),
             identifiers=self._list_identifier_history(tenant_id, resource_id),
+        )
+
+    def get_resource_relationships(
+        self,
+        tenant_id: UUID,
+        resource_id: UUID,
+    ) -> ResourceRelationshipsProjection | None:
+        core_statement = select(Resource.id, Resource.tenant_id).where(
+            Resource.tenant_id == tenant_id,
+            Resource.id == resource_id,
+        )
+        core = self._session.execute(core_statement).one_or_none()
+        if core is None:
+            return None
+
+        direction_rank = case(
+            (ResourceRelationship.source_resource_id == resource_id, 0),
+            else_=1,
+        )
+        statement = (
+            select(
+                ResourceRelationship.id,
+                ResourceRelationship.relationship_type_id,
+                ResourceRelationship.source_resource_id,
+                ResourceRelationship.target_resource_id,
+                ResourceRelationship.confidence_score,
+                ResourceRelationship.valid_from,
+                ResourceRelationship.source,
+                ResourceRelationship.created_at,
+            )
+            .where(
+                ResourceRelationship.tenant_id == tenant_id,
+                ResourceRelationship.valid_to.is_(None),
+                or_(
+                    ResourceRelationship.source_resource_id == resource_id,
+                    ResourceRelationship.target_resource_id == resource_id,
+                ),
+            )
+            .order_by(
+                direction_rank,
+                ResourceRelationship.relationship_type_id,
+                ResourceRelationship.source_resource_id,
+                ResourceRelationship.target_resource_id,
+                ResourceRelationship.id,
+            )
+        )
+        relationships = tuple(
+            ResourceRelationshipProjection(
+                id=row.id,
+                relationship_type_id=row.relationship_type_id,
+                source_resource_id=row.source_resource_id,
+                target_resource_id=row.target_resource_id,
+                direction=_relationship_direction(row, resource_id),
+                confidence_score=row.confidence_score,
+                valid_from=row.valid_from,
+                source=row.source,
+                created_at=row.created_at,
+            )
+            for row in self._session.execute(statement)
+        )
+        return ResourceRelationshipsProjection(
+            resource_id=core.id,
+            tenant_id=core.tenant_id,
+            relationships=relationships,
         )
 
     def _list_current_ownership(
@@ -840,3 +907,13 @@ class SQLAlchemyResourceQueryService(ResourceQueryService):
             )
             for row in self._session.execute(statement)
         )
+
+
+def _relationship_direction(row: object, resource_id: UUID) -> str:
+    if row.source_resource_id == resource_id:
+        return "outgoing"
+    if row.target_resource_id == resource_id:
+        return "incoming"
+    raise AssertionError(
+        "ResourceRelationship row is not connected to requested Resource"
+    )

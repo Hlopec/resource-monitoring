@@ -2312,3 +2312,4 @@ def test_continuation_query_contains_keyset_predicate(migrated_engine: Engine) -
 
 def test_sqlalchemy_resource_query_service_is_protocol_compatible() -> None:
     assert hasattr(SQLAlchemyResourceQueryService, "list_resources")
+    assert hasattr(SQLAlchemyResourceQueryService, "get_resource_relationships")

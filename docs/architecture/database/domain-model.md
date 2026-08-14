@@ -80,6 +80,8 @@ The implemented relationship table stores directed edges from `source_resource_i
 
 A current relationship row has `valid_to IS NULL`; changing an endpoint, relationship type, confidence score, or source should close the old row and insert a new temporal fact. Current uniqueness is scoped to `tenant_id`, `source_resource_id`, `target_resource_id`, and `relationship_type_id`, while historical reuse remains allowed. Referenced resources and relationship types use restrictive deletes.
 
+The application relationship read model is a current one-hop workflow for one requested stored Resource. It returns current `resource_relationship` rows where the requested Resource is either the stored source or the stored target. The stored `source_resource_id` and `target_resource_id` are preserved exactly; a derived relative direction reports `"outgoing"` when the requested Resource is the source and `"incoming"` when it is the target. It does not include closed relationship history rows, perform transitive traversal, recursively expand dependency graphs, or combine ResourceMerge lineage. Source-side access is supported by `ix_resource_relationship_tenant_id_source_resource_id` and `ix_resource_relationship_tenant_source_type`; target-side access is supported by `ix_resource_relationship_tenant_id_target_resource_id` and `ix_resource_relationship_tenant_target_type`.
+
 ### Classification type, classification value, and resource classification
 
 Classification types and values remain global managed catalog values. Classification values provide a controlled vocabulary for classifying resources, and each value belongs to exactly one classification type.

@@ -35,6 +35,14 @@ class GetResourceHistoryQuery:
 
 
 @dataclass(frozen=True)
+class GetResourceRelationshipsQuery:
+    """Query for tenant-scoped direct Resource relationships."""
+
+    tenant_id: UUID
+    resource_id: UUID
+
+
+@dataclass(frozen=True)
 class GetResourceByCanonicalNameQuery:
     """Query for a fully materialized resource projection by canonical name."""
 

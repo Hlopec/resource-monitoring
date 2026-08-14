@@ -79,6 +79,30 @@ class ResourceRelationshipAssignedResult:
 
 
 @dataclass(frozen=True)
+class ResourceRelationshipResult:
+    """Current direct Resource relationship projection."""
+
+    id: UUID
+    relationship_type_id: UUID
+    source_resource_id: UUID
+    target_resource_id: UUID
+    direction: str
+    confidence_score: Decimal
+    valid_from: datetime
+    source: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class ResourceRelationshipsResult:
+    """Direct current relationships for one requested Resource."""
+
+    resource_id: UUID
+    tenant_id: UUID
+    relationships: tuple[ResourceRelationshipResult, ...]
+
+
+@dataclass(frozen=True)
 class ResourceAliasAssignedResult:
     """Result returned after a resource alias assignment is committed."""
 
