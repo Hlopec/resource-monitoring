@@ -46,6 +46,8 @@ The Resource details read model is anchored by `(tenant_id, resource_id)` and de
 
 The Resource history read model is a separate temporal workflow for the same requested stored resource. It returns all stored `resource_state`, `resource_ownership`, `resource_label`, `resource_classification`, and `resource_identifier` rows, including closed rows and current rows where `valid_to IS NULL`, with stored `valid_from` and `valid_to` intervals preserved. It does not infer alias history from `resource_alias.first_seen_at` or `last_seen_at`, and it does not expose ResourceMerge lineage history.
 
+Block 03 closes with these application read contracts separated by responsibility: Resource details for current operational state, Resource history for temporal fact sequences, Resource relationships for current direct one-hop relationship rows, and canonical resolution for explicit merge-lineage traversal. All are tenant-scoped and describe the requested stored Resource unless the canonical-resolution query is invoked explicitly.
+
 ### Resource identifier
 
 Resource identifier stores a specific identifier value for a resource, using an identifier type and a normalized representation. Each assignment remains temporally versioned so that the identity evidence can be audited and superseded when required.

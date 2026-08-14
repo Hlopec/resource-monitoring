@@ -42,6 +42,10 @@ Read handlers use one fresh Unit of Work, perform tenant-scoped reads without wr
 
 All tenant-owned Resource workflows require explicit `tenant_id`. Wrong-tenant lookups return the same application miss shape as absent rows. There is no `tenant_id=None`, ambient tenant context, global fallback lookup, or bypass flag in application contracts or tenant-owned repository contracts.
 
+Stage `03.3.4` closes Block 03 for the Application Core & Persistence Layer. Complete scope means the implemented Resource command handlers, Resource read handlers, repository ports, SQLAlchemy repositories, `ResourceQueryService`, SQLAlchemy Unit of Work, persistence error translation, read-model contracts, regression tests, and architecture documentation are audited and validated. This does not mean the overall backend is complete: API/transport wiring, collectors, advisories, matching, notifications, portals, advanced search, graph traversal, relationship history, production index tuning, and broader lifecycle workflows remain future blocks.
+
+Final Block 03 responsibilities are deliberately separate. Application handlers orchestrate one use case and translate application-level misses/conflicts; transactional repositories provide focused aggregate and mutation-oriented access; `ResourceQueryService` owns projection-oriented Resource reads; `SQLAlchemyUnitOfWork` owns session, transaction, repository, and query-service lifecycle; SQLAlchemy adapters implement concrete database statements and persistence-error translation below the application boundary.
+
 The current Resource details projection exposes the read model deliberately:
 
 | Fact | Exposed in `ResourceDetailsResult`? |
@@ -57,6 +61,28 @@ The current Resource details projection exposes the read model deliberately:
 | canonical resolution | separate query |
 
 Relationship facts are exposed through the separate Stage `03.3.3` one-hop relationship read model; `ResourceDetailsResult` and `ResourceHistoryResult` do not embed relationships. Canonical resolution is intentionally separate and no ordinary Resource read silently canonicalizes the requested resource. Stage `03.3.2` adds `ResourceHistoryResult` as a separate temporal read model for ResourceState, ResourceOwnership, ResourceLabel, ResourceClassification, and ResourceIdentifier rows. ResourceAlias is non-temporal and ResourceMerge lineage is not part of Resource history.
+
+Final collection ordering and query-count matrix:
+
+| Read path | Ordering | SELECT count |
+| --- | --- | --- |
+| Resource list | `resource.created_at`, `resource.id`; keyset cursor uses the same tuple | 1 per page |
+| Exact identifier lookup | exact tenant/type/namespace/value match, singular database uniqueness | 1 |
+| Exact alias lookup | exact tenant/alias type/normalized value match, singular database uniqueness | 1 |
+| Details ownership | `ownership_role_id`, `is_primary DESC`, `organization_id`, `id` | included in details fixed plan |
+| Details labels | label `key`, label `value`, `label_id`, assignment `id` | included in details fixed plan |
+| Details classifications | `classification_type_id`, `classification_value_id`, `id` | included in details fixed plan |
+| Details identifiers | `identifier_type_id`, namespace nulls first, namespace, `normalized_value`, `id` | included in details fixed plan |
+| Details aliases | `alias_type`, `normalized_value`, `id` | included in details fixed plan |
+| Resource details | current core/state/primary owner/merge plus current child collections and aliases | 6 for an existing Resource |
+| History states | `valid_from`, `valid_to NULLS LAST`, `id` | included in history fixed plan |
+| History ownership | `valid_from`, `valid_to NULLS LAST`, `ownership_role_id`, `organization_id`, `id` | included in history fixed plan |
+| History labels | `valid_from`, `valid_to NULLS LAST`, label `key`, label `value`, `label_id`, assignment `id` | included in history fixed plan |
+| History classifications | `valid_from`, `valid_to NULLS LAST`, `classification_type_id`, `classification_value_id`, `is_primary`, `id` | included in history fixed plan |
+| History identifiers | `valid_from`, `valid_to NULLS LAST`, `identifier_type_id`, namespace nulls first, namespace, `normalized_value`, `id` | included in history fixed plan |
+| Resource history | Resource core plus five temporal fact collections | 6 for an existing Resource; 1 for missing/wrong tenant |
+| Resource relationships | outgoing before incoming, `relationship_type_id`, stored source id, stored target id, `id` | 2 for an existing Resource; 1 for missing/wrong tenant |
+| Canonical resolution | iterative direct outgoing merge traversal with visited/depth guards | intentionally traversal-dependent |
 
 ## Dependency Direction
 
@@ -1064,9 +1090,19 @@ Index readiness after Stage `03.2`:
 | Current identifier lookup | `ix_resource_identifier_tenant_id_resource_id`, `ix_res_ident_tenant_type_hash`, `ix_res_ident_tenant_type_normalized`, `ix_resource_identifier_tenant_id_valid_to`, `uq_resource_identifier_current_value`, `uq_resource_identifier_current_primary` | Current exact tenant/type/namespace/normalized-value uniqueness is covered; query intentionally compares full normalized value and does not use `value_hash` | Consider an explicit current exact lookup index including namespace if measured workloads need it |
 | Alias lookup | `uq_resource_alias_tenant_alias_type_normalized_value`, `ix_resource_alias_tenant_resource_id`, `ix_resource_alias_tenant_alias_type`, `ix_resource_alias_tenant_last_seen_at` | Exact tenant/alias-type/normalized-value lookup is covered by unique constraint | No immediate follow-up |
 
+Final Block 03 index/access-path closeout:
+
+| Query path | Existing indexes | Predicate/order coverage | Follow-up recommendation |
+| --- | --- | --- | --- |
+| Resource details child reads | Current state, ownership, label, classification, identifier, alias, and merge indexes listed above plus `uq_resource_tenant_id_id` | Fixed six-SELECT details plan is tenant/resource anchored and avoids one-to-many cartesian multiplication | Add partial current tenant/resource covering indexes only after measuring details read pressure |
+| Resource history reads | `ix_resource_state_tenant_resource_valid_from`, `ix_resource_ownership_tenant_id_resource_id`, `ix_resource_ownership_tenant_resource_role`, `ix_resource_label_tenant_resource_label`, `ix_resource_classification_tenant_resource_value`, `ix_resource_classification_tenant_resource_type`, `ix_resource_identifier_tenant_id_resource_id` | Tenant/resource predicates are covered for correctness; chronological ordering may still sort within a resource's history | Consider `(tenant_id, resource_id, valid_from, id)` per temporal fact table after measuring history workloads |
+| Resource relationship source/target reads | `ix_resource_relationship_tenant_id_source_resource_id`, `ix_resource_relationship_tenant_source_type`, `ix_resource_relationship_tenant_id_target_resource_id`, `ix_resource_relationship_tenant_target_type`, `ix_resource_relationship_tenant_id_valid_to`, `uq_resource_relationship_current` | Current one-hop OR query has tenant-aware source and target access paths | Consider partial current source/target indexes only after measuring relationship read plans |
+| Resource merge lineage | `uq_resource_merge_tenant_source_resource_id`, `ix_resource_merge_tenant_target_merged_at`, `ix_resource_merge_tenant_merged_at` | Direct outgoing traversal is covered by source uniqueness; target/time indexes support incoming lineage inspection | Recursive CTE optimization remains a future measured performance topic |
+| Transactional mutation lookups | Tenant/resource indexes and current partial unique indexes for temporal facts | Command pre-checks and commit-time uniqueness races are covered for correctness | No speculative migration in Block 03 closeout |
+
 ## Testing Strategy
 
-Architecture enforcement tests check that application modules do not import SQLAlchemy, FastAPI, Pydantic, or concrete persistence implementations; ports do not import concrete persistence implementations; ports do not expose SQLAlchemy-facing types; tenant-scoped repository protocols require explicit tenant ids; Unit of Work lifecycle methods exist; `UnitOfWorkFactory` returns the application-facing `UnitOfWork`; package imports succeed; handler protocols expose direct `handle(...)` contracts; reference handlers depend on `UnitOfWorkFactory`; Resource query handlers remain read-only; ResourceQueryService remains limited to `list_resources(...)`, `find_by_identifier(...)`, `find_by_alias(...)`, `get_resource_details(...)`, and `get_resource_history(...)`; list filtering does not perform catalog-existence lookups; identity, details, and history lookup handlers do not auto-resolve canonical Resources; and the application error hierarchy is valid.
+Architecture enforcement tests check that application modules do not import SQLAlchemy, FastAPI, Pydantic, or concrete persistence implementations; ports do not import concrete persistence implementations; ports do not expose SQLAlchemy-facing types; tenant-scoped repository protocols require explicit tenant ids; Unit of Work lifecycle methods exist; `UnitOfWorkFactory` returns the application-facing `UnitOfWork`; package imports succeed; handler protocols expose direct `handle(...)` contracts; reference handlers depend on `UnitOfWorkFactory`; Resource query handlers remain read-only; ResourceQueryService remains limited to `list_resources(...)`, `find_by_identifier(...)`, `find_by_alias(...)`, `get_resource_details(...)`, `get_resource_history(...)`, and `get_resource_relationships(...)`; list filtering does not perform catalog-existence lookups; identity, details, history, and relationship lookup handlers do not auto-resolve canonical Resources; and the application error hierarchy is valid.
 
 SQLAlchemy Unit of Work integration tests verify explicit commit, rollback-by-default for inserts/updates/deletes/flushed rows, exception rollback and propagation, failed flush/commit cleanup, single-use lifecycle errors, session isolation, factory call count, shared engine usability after Unit of Work exit, protocol compliance, and compatibility with `get_session()` and `transaction_session()`.
 
@@ -1086,7 +1122,7 @@ Lineage repository tests verify protocol compatibility, injected-session usage, 
 
 Canonical Resource resolution query tests verify the frozen query contract, immutable entity-free result, requested-resource miss behavior, unmerged self-resolution, one-hop and multi-hop chains, immediate-target versus canonical-target semantics, incoming branch behavior, tenant isolation, cycle defense, broken terminal lineage defense, the 64-edge maximum and 65th-edge rejection rule, fresh Unit of Work usage per invocation, SQLAlchemy integration, and no commit, lock, add, path-compression, lineage-rewrite, cache, or resource-fact mutation behavior.
 
-Resource application-core integration tests verify cross-workflow composition using real PostgreSQL and actual handlers: base Resource creation plus representative facts through details read-back; state transition history plus current details read-back; directed relationship assignment without reverse-edge creation; merge chains plus canonical resolution without lineage rewrite; merge lineage-only behavior preserving source facts; representative cross-tenant not-found behavior; and representative commit-failure atomicity with fresh Unit of Work recovery.
+Resource application-core integration tests verify cross-workflow composition using real PostgreSQL and actual handlers: base Resource creation plus representative facts through details read-back; state transition history plus current details read-back; directed relationship assignment without reverse-edge creation; merge chains plus canonical resolution without lineage rewrite; merge lineage-only behavior preserving source facts; a Block 03 closeout matrix exercising list, exact identifier lookup, exact alias lookup, details, history, relationships, and canonical resolution across overlapping tenant data; representative cross-tenant not-found behavior; and representative commit-failure atomicity with fresh Unit of Work recovery.
 
 Application service architecture tests verify immutable commands, immutable queries, immutable typed results, structural `UnitOfWorkFactory` compatibility, fresh Unit of Work creation per execution, command handler commit-on-success behavior, rollback on command validation failure, query handler no-commit behavior, rollback on query misses, technology-neutral validation failures, and reference handler compatibility with the existing SQLAlchemy Unit of Work through factory injection.
 
