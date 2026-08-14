@@ -29,12 +29,25 @@ from app.application.handlers import (
     AssignResourceOwnershipHandler,
     AssignResourceRelationshipHandler,
     CreateResourceHandler,
+    FindResourceByAliasHandler,
+    FindResourceByIdentifierHandler,
     GetResourceDetailsHandler,
+    GetResourceHistoryHandler,
+    GetResourceRelationshipsHandler,
+    ListResourcesHandler,
     MergeResourceHandler,
     ResolveCanonicalResourceHandler,
     TransitionResourceStateHandler,
 )
-from app.application.queries import GetResourceDetailsQuery, ResolveCanonicalResourceQuery
+from app.application.queries import (
+    FindResourceByAliasQuery,
+    FindResourceByIdentifierQuery,
+    GetResourceDetailsQuery,
+    GetResourceHistoryQuery,
+    GetResourceRelationshipsQuery,
+    ListResourcesQuery,
+    ResolveCanonicalResourceQuery,
+)
 from app.db.seed.catalogs import seed_catalogs
 from app.models import (
     ClassificationType,
@@ -603,6 +616,243 @@ def test_cross_tenant_composed_operations_do_not_leak_resource_existence(
         )
     with pytest.raises(EntityNotFoundError):
         ResolveCanonicalResourceHandler(_uow_factory(SessionLocal)).handle(
+            ResolveCanonicalResourceQuery(tenant_id=tenant_a, resource_id=resource_b)
+        )
+
+
+def test_block_03_read_models_remain_tenant_scoped_and_separate(
+    migrated_engine: Engine,
+) -> None:
+    SessionLocal = _session_factory(migrated_engine)
+    with SessionLocal() as setup:
+        tenant_a = _seed_tenant(setup, prefix="tenant-a")
+        tenant_b = _seed_tenant(setup, prefix="tenant-b")
+        organization_a = _seed_organization(setup, tenant_a)
+        organization_b = _seed_organization(setup, tenant_b)
+        label_a = _seed_label(setup, tenant_a)
+        label_b = _seed_label(setup, tenant_b)
+        resource_a = _seed_base_resource(setup, tenant_a, _slug("tenant-a-resource"))
+        canonical_a = _seed_base_resource(setup, tenant_a, _slug("tenant-a-canonical"))
+        outgoing_target = _seed_base_resource(setup, tenant_a, _slug("outgoing"))
+        incoming_source = _seed_base_resource(setup, tenant_a, _slug("incoming"))
+        canonical_target = _seed_base_resource(
+            setup,
+            tenant_a,
+            _slug("canonical-target"),
+        )
+        resource_b = _seed_base_resource(setup, tenant_b, _slug("tenant-b-resource"))
+        tenant_b_target = _seed_base_resource(setup, tenant_b, _slug("tenant-b-target"))
+        old_state = ResourceState(
+            tenant_id=tenant_a,
+            resource_id=resource_a,
+            lifecycle_status_id=_catalog_id(setup, LifecycleStatus, "active"),
+            criticality_id=_catalog_id(setup, Criticality, "medium"),
+            exposure_level_id=_catalog_id(setup, ExposureLevel, "public"),
+            source_priority=100,
+            confidence_score=Decimal("0.9000"),
+            valid_from=_now(-20),
+            valid_to=_now(-10),
+            source="seed",
+        )
+        current_state = ResourceState(
+            tenant_id=tenant_a,
+            resource_id=resource_a,
+            lifecycle_status_id=_catalog_id(setup, LifecycleStatus, "inactive"),
+            criticality_id=_catalog_id(setup, Criticality, "high"),
+            exposure_level_id=_catalog_id(setup, ExposureLevel, "internal"),
+            source_priority=200,
+            confidence_score=Decimal("0.8000"),
+            valid_from=_now(-10),
+            valid_to=None,
+            source="seed",
+        )
+        setup.add_all([old_state, current_state])
+        setup.commit()
+
+    factory = _uow_factory(SessionLocal)
+    with SessionLocal() as catalog_session:
+        relationship_type_id = _catalog_id(
+            catalog_session,
+            RelationshipType,
+            "depends_on",
+        )
+        identifier_type_id = _catalog_id(catalog_session, IdentifierType, "fqdn")
+        classification_type_id = _catalog_id(
+            catalog_session,
+            ClassificationType,
+            "environment",
+        )
+        production_id = _classification_value_id(
+            catalog_session,
+            classification_type_id,
+            "production",
+        )
+        _assign_representative_facts(
+            SessionLocal=SessionLocal,
+            tenant_id=tenant_a,
+            resource_id=resource_a,
+            organization_id=organization_a,
+            label_id=label_a,
+            session=catalog_session,
+            suffix="closeout",
+        )
+        _assign_representative_facts(
+            SessionLocal=SessionLocal,
+            tenant_id=tenant_b,
+            resource_id=resource_b,
+            organization_id=organization_b,
+            label_id=label_b,
+            session=catalog_session,
+            suffix="closeout",
+        )
+
+    relationship_handler = AssignResourceRelationshipHandler(factory)
+    relationship_handler.handle(
+        AssignResourceRelationshipCommand(
+            tenant_id=tenant_a,
+            source_resource_id=resource_a,
+            relationship_type_id=relationship_type_id,
+            target_resource_id=outgoing_target,
+            confidence_score=Decimal("0.9000"),
+            valid_from=_now(-4),
+            source="manual",
+        )
+    )
+    relationship_handler.handle(
+        AssignResourceRelationshipCommand(
+            tenant_id=tenant_a,
+            source_resource_id=incoming_source,
+            relationship_type_id=relationship_type_id,
+            target_resource_id=resource_a,
+            confidence_score=Decimal("0.9000"),
+            valid_from=_now(-3),
+            source="manual",
+        )
+    )
+    relationship_handler.handle(
+        AssignResourceRelationshipCommand(
+            tenant_id=tenant_a,
+            source_resource_id=canonical_a,
+            relationship_type_id=relationship_type_id,
+            target_resource_id=canonical_target,
+            confidence_score=Decimal("0.9000"),
+            valid_from=_now(-2),
+            source="manual",
+        )
+    )
+    relationship_handler.handle(
+        AssignResourceRelationshipCommand(
+            tenant_id=tenant_b,
+            source_resource_id=resource_b,
+            relationship_type_id=relationship_type_id,
+            target_resource_id=tenant_b_target,
+            confidence_score=Decimal("0.9000"),
+            valid_from=_now(-1),
+            source="manual",
+        )
+    )
+    MergeResourceHandler(factory).handle(
+        MergeResourceCommand(
+            tenant_id=tenant_a,
+            source_resource_id=resource_a,
+            target_resource_id=canonical_a,
+            reason="duplicate",
+            source="manual",
+            merged_at=_now(),
+        )
+    )
+
+    page = ListResourcesHandler(factory).handle(
+        ListResourcesQuery(
+            tenant_id=tenant_a,
+            organization_id=organization_a,
+            label_id=label_a,
+            classification_type_id=classification_type_id,
+            classification_value_id=production_id,
+            page_size=10,
+        )
+    )
+    identifier = FindResourceByIdentifierHandler(factory).handle(
+        FindResourceByIdentifierQuery(
+            tenant_id=tenant_a,
+            identifier_type_id=identifier_type_id,
+            namespace="dns",
+            normalized_value="closeout.example.com",
+        )
+    )
+    alias = FindResourceByAliasHandler(factory).handle(
+        FindResourceByAliasQuery(
+            tenant_id=tenant_a,
+            alias_type="dns_name",
+            normalized_value="closeout.example.com",
+        )
+    )
+    details = GetResourceDetailsHandler(factory).handle(
+        GetResourceDetailsQuery(tenant_id=tenant_a, resource_id=resource_a)
+    )
+    history = GetResourceHistoryHandler(factory).handle(
+        GetResourceHistoryQuery(tenant_id=tenant_a, resource_id=resource_a)
+    )
+    relationships = GetResourceRelationshipsHandler(factory).handle(
+        GetResourceRelationshipsQuery(tenant_id=tenant_a, resource_id=resource_a)
+    )
+    canonical = ResolveCanonicalResourceHandler(factory).handle(
+        ResolveCanonicalResourceQuery(tenant_id=tenant_a, resource_id=resource_a)
+    )
+
+    assert [item.resource_id for item in page.items] == [resource_a]
+    assert identifier.resource.id == resource_a
+    assert alias.resource.id == resource_a
+    assert details.id == resource_a
+    assert details.outgoing_merge is not None
+    assert details.outgoing_merge.target_resource_id == canonical_a
+    assert not hasattr(details, "relationships")
+    assert [state.id for state in history.states] == [old_state.id, current_state.id]
+    assert history.states[0].valid_to == old_state.valid_to
+    assert history.states[1].valid_to is None
+    assert not hasattr(history, "relationships")
+    assert not hasattr(history, "outgoing_merge")
+    assert {
+        (relationship.source_resource_id, relationship.target_resource_id)
+        for relationship in relationships.relationships
+    } == {
+        (resource_a, outgoing_target),
+        (incoming_source, resource_a),
+    }
+    assert {relationship.direction for relationship in relationships.relationships} == {
+        "incoming",
+        "outgoing",
+    }
+    assert all(
+        resource_b
+        not in (relationship.source_resource_id, relationship.target_resource_id)
+        for relationship in relationships.relationships
+    )
+    assert canonical.canonical_resource_id == canonical_a
+
+    tenant_b_identifier = FindResourceByIdentifierHandler(factory).handle(
+        FindResourceByIdentifierQuery(
+            tenant_id=tenant_b,
+            identifier_type_id=identifier_type_id,
+            namespace="dns",
+            normalized_value="closeout.example.com",
+        )
+    )
+    assert tenant_b_identifier.resource.id == resource_b
+    with pytest.raises(EntityNotFoundError):
+        GetResourceDetailsHandler(factory).handle(
+            GetResourceDetailsQuery(tenant_id=tenant_a, resource_id=resource_b)
+        )
+    with pytest.raises(EntityNotFoundError):
+        GetResourceHistoryHandler(factory).handle(
+            GetResourceHistoryQuery(tenant_id=tenant_a, resource_id=resource_b)
+        )
+    with pytest.raises(EntityNotFoundError):
+        GetResourceRelationshipsHandler(factory).handle(
+            GetResourceRelationshipsQuery(tenant_id=tenant_a, resource_id=resource_b)
+        )
+    with pytest.raises(EntityNotFoundError):
+        ResolveCanonicalResourceHandler(factory).handle(
             ResolveCanonicalResourceQuery(tenant_id=tenant_a, resource_id=resource_b)
         )
 
