@@ -2,11 +2,11 @@
 
 ## Goals
 
-Stage `03.0` establishes the boundary rules for the application core and PostgreSQL persistence layer. Stage `03.1` starts the application-service architecture that orchestrates those persistence contracts. Together they define dependency direction, package responsibilities, command and query contracts, handler contracts, repository contract conventions, Unit of Work semantics, transaction ownership, tenant-safety rules, ORM entity usage policy, application result contracts, persistence error boundaries, relationship-loading conventions, write/read separation, testing expectations, and the implementation order for `03.0.2+`.
+Stage `03.0` establishes the boundary rules for the application core and PostgreSQL persistence layer. Stage `03.1` starts the application-service architecture that orchestrates those persistence contracts. Together they define dependency direction, package responsibilities, command and query contracts, handler contracts, repository contract conventions, Unit of Work semantics, transaction ownership, tenant-safety rules, ORM entity usage policy, application result contracts, persistence error boundaries, relationship-loading conventions, write/read separation, testing expectations, and the implementation order for `03.0.2+`. Stage `04.1.1` now defines the separate HTTP/API transport boundary in [api-and-service-layer.md](api-and-service-layer.md).
 
 ## Non-goals
 
-This stage does not implement API routes, FastAPI dependency wiring, Pydantic request or response schemas, broad lifecycle business workflows, generic temporal replacement frameworks, merge workflows, collectors, background jobs, command buses, mediators, handler registries, decorators, middleware, event buses, partitioning, sharding, async SQLAlchemy, or new database tables. Existing merged Alembic migrations are not edited.
+This stage does not implement production API routes, broad lifecycle business workflows, generic temporal replacement frameworks, merge workflows, collectors, background jobs, command buses, mediators, handler registries, decorators, middleware, event buses, partitioning, sharding, async SQLAlchemy, or new database tables. Existing merged Alembic migrations are not edited. The HTTP transport package introduced in Stage `04.1.1` remains outside the application core.
 
 ## Current-State Assessment
 
@@ -42,7 +42,7 @@ Read handlers use one fresh Unit of Work, perform tenant-scoped reads without wr
 
 All tenant-owned Resource workflows require explicit `tenant_id`. Wrong-tenant lookups return the same application miss shape as absent rows. There is no `tenant_id=None`, ambient tenant context, global fallback lookup, or bypass flag in application contracts or tenant-owned repository contracts.
 
-Stage `03.3.4` closes Block 03 for the Application Core & Persistence Layer. Complete scope means the implemented Resource command handlers, Resource read handlers, repository ports, SQLAlchemy repositories, `ResourceQueryService`, SQLAlchemy Unit of Work, persistence error translation, read-model contracts, regression tests, and architecture documentation are audited and validated. This does not mean the overall backend is complete: API/transport wiring, collectors, advisories, matching, notifications, portals, advanced search, graph traversal, relationship history, production index tuning, and broader lifecycle workflows remain future blocks.
+Stage `03.3.4` closes Block 03 for the Application Core & Persistence Layer. Complete scope means the implemented Resource command handlers, Resource read handlers, repository ports, SQLAlchemy repositories, `ResourceQueryService`, SQLAlchemy Unit of Work, persistence error translation, read-model contracts, regression tests, and architecture documentation are audited and validated. This does not mean the overall backend is complete: production Resource API endpoints, collectors, advisories, matching, notifications, portals, advanced search, graph traversal, relationship history, production index tuning, and broader lifecycle workflows remain future blocks.
 
 Final Block 03 responsibilities are deliberately separate. Application handlers orchestrate one use case and translate application-level misses/conflicts; transactional repositories provide focused aggregate and mutation-oriented access; `ResourceQueryService` owns projection-oriented Resource reads; `SQLAlchemyUnitOfWork` owns session, transaction, repository, and query-service lifecycle; SQLAlchemy adapters implement concrete database statements and persistence-error translation below the application boundary.
 
@@ -88,7 +88,7 @@ Final collection ordering and query-count matrix:
 
 ```mermaid
 flowchart TD
-    API[Future HTTP/API layer] --> APP[Application layer]
+    API[HTTP/API transport layer] --> APP[Application layer]
     APP --> CQ[Commands and Queries]
     CQ --> HANDLERS[Application Handlers]
     HANDLERS --> UOWF[UnitOfWorkFactory]
@@ -98,13 +98,13 @@ flowchart TD
     SA --> PG[(PostgreSQL)]
 ```
 
-The application layer owns use-case decisions and depends on application-facing contracts. Future transport code constructs command or query objects and invokes explicit handlers. Handlers depend on the application-facing `UnitOfWorkFactory` protocol, not on `SQLAlchemyUnitOfWork` or concrete repositories. SQLAlchemy implementations adapt Unit of Work and repository contracts to ORM models and PostgreSQL.
+The application layer owns use-case decisions and depends on application-facing contracts. HTTP transport code constructs command or query objects and invokes explicit handlers across the boundary documented in [api-and-service-layer.md](api-and-service-layer.md). Handlers depend on the application-facing `UnitOfWorkFactory` protocol, not on `SQLAlchemyUnitOfWork` or concrete repositories. SQLAlchemy implementations adapt Unit of Work and repository contracts to ORM models and PostgreSQL.
 
 ## Dependency Matrix
 
 | Source | May depend on | Must not depend on |
 | --- | --- | --- |
-| Future API layer | Application use cases, application errors, DTOs when introduced | SQLAlchemy sessions for write operations, concrete repositories |
+| API transport layer | Application use cases, application errors, API-owned Pydantic schemas | SQLAlchemy sessions, ORM models as transport contracts, concrete repositories |
 | Application layer | ORM mapped entity types through repository results, application ports, application errors, immutable commands, immutable queries, typed results | SQLAlchemy `Session`, query APIs, driver exceptions, concrete persistence implementations, FastAPI, Pydantic |
 | Application ports | Standard library typing and domain/entity types | SQLAlchemy, FastAPI, Pydantic, concrete persistence implementations |
 | SQLAlchemy persistence | Application ports, application errors, ORM models, SQLAlchemy | API routing, business workflows outside persistence adaptation |
