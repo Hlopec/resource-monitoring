@@ -317,6 +317,60 @@ FastAPI/Pydantic `RequestValidationError` remains transport validation and is no
 
 `register_application_error_handlers(app)` is called from `api/app/main.py`. Future route code should let application errors propagate and must not add route-local `try/except ApplicationError` translation.
 
+## Resource List API
+
+Stage `04.2` starts the production Resource Read API with exactly one endpoint:
+
+```http
+GET /api/v1/tenants/{tenant_id}/resources
+```
+
+The route is a thin transport adapter:
+
+```text
+HTTP path/query params
+-> FastAPI parsing
+-> ListResourcesQuery
+-> ListResourcesHandler
+-> ResourcePageResult
+-> resource_page_response(...)
+-> ResourcePageResponse
+```
+
+The path `tenant_id` is parsed as a native UUID and passed directly into `ListResourcesQuery.tenant_id`. It is a tenant scope selector, not an authentication or authorization decision. There is no default tenant, ambient tenant, global tenant, tenant query-parameter override, or route-level tenant existence check.
+
+Supported query parameters match `ListResourcesQuery` exactly:
+
+- `resource_type_id: UUID | None`
+- `lifecycle_status_id: UUID | None`
+- `organization_id: UUID | None`
+- `label_id: UUID | None`
+- `classification_type_id: UUID | None`
+- `classification_value_id: UUID | None`
+- `page_size: int`
+- `cursor: str | None`
+
+The route constructs `ListResourcesQuery` field by field. It does not pass dictionaries into a generic query factory, use reflection mapping, perform filtering in Python, sort results, decode cursors, inspect cursor internals, or access persistence directly.
+
+Page-size semantics remain owned by the application layer: default `50`, minimum `1`, maximum `200`. The route lets `ListResourcesHandler` and existing application validation raise `ValidationError`, which the centralized API error handler maps to the public 422 envelope. The classification rule that `classification_value_id` requires `classification_type_id` is likewise enforced by application validation, not route-local conditionals.
+
+The cursor is opaque. The route accepts `cursor: str | None`, passes it unchanged to `ListResourcesQuery`, and returns `next_cursor` unchanged through `resource_page_response(...)`.
+
+The response model is `ResourcePageResponse`:
+
+```json
+{
+  "items": [],
+  "next_cursor": null
+}
+```
+
+Non-empty pages contain ordered `ResourceSummaryResponse` items. Empty tenant-scoped results return `200 OK` with `{"items": [], "next_cursor": null}`. The response does not expose `total_count`, `page`, `page_size`, `limit`, `offset`, `total_pages`, filters, links, or previous cursors.
+
+The route depends on `get_list_resources_handler`. It does not instantiate `ListResourcesHandler`, resolve `UnitOfWorkFactory`, import `SQLAlchemyUnitOfWork`, import repositories, call `ResourceQueryService`, or catch `ApplicationError`. Malformed path and query UUIDs remain FastAPI transport-validation errors, separate from application `ValidationError`.
+
+Authentication and authorization remain deferred.
+
 ## OpenAPI Policy
 
 OpenAPI tags, operation ids, status codes, examples, and schema metadata belong to API modules only. Application commands, queries, handlers, and results must remain unaware of OpenAPI. Stage `04.1.3` only verifies that common schemas can be included in generated OpenAPI components; operation metadata hardening remains deferred.
@@ -347,9 +401,10 @@ Architecture tests enforce:
 - handler providers produce fresh instances and no global handler singletons are introduced;
 - `main.py` stays bootstrap-oriented;
 - the FastAPI app imports and keeps `/` and `/health` working;
-- the `/api/v1` router baseline is composable without Resource endpoints;
+- the `/api/v1` production Resource route inventory contains only `GET /api/v1/tenants/{tenant_id}/resources`;
+- Resource routes use API-owned response models and do not call transaction methods;
 - command bus, mediator, handler registry, and service locator patterns are not introduced.
 
 ## Deferred Work
 
-Stage `04.1` is now complete. Deferred work includes `04.2.1` Resource List API, full Resource details/history/relationship schema families, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
+Stage `04.1` is complete and Stage `04.2` has started. Deferred work includes `04.2.2` Resource Details API, Resource history/relationship endpoints, identity lookup endpoints, canonical resolution, write endpoints, full Resource details/history/relationship schema families, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.

@@ -17,7 +17,13 @@ from app.api.errors import (
     application_error_status_code,
 )
 from app.api.router import api_v1_router
-from app.api.schemas import ApiError, ApiErrorDetail, ApiErrorResponse, ApiSchema
+from app.api.schemas import (
+    ApiError,
+    ApiErrorDetail,
+    ApiErrorResponse,
+    ApiSchema,
+    ResourcePageResponse,
+)
 from app.application.errors import ConcurrentModificationError, ConflictError
 from app.application.errors import ApplicationError
 from app.application.handlers import (
@@ -450,10 +456,19 @@ def test_fastapi_app_imports_and_existing_system_routes_work() -> None:
     assert health_response.json() == {"status": "healthy"}
 
 
-def test_api_v1_router_baseline_is_composable_without_resource_endpoints() -> None:
+def test_api_v1_router_contains_only_resource_list_production_endpoint() -> None:
     route_paths = {route.path for route in app.routes}
+    api_v1_paths = {route.path for route in api_v1_router.routes}
+    resource_routes = [
+        route
+        for route in app.routes
+        if getattr(route, "path", "").startswith("/api/v1/tenants/")
+    ]
 
     assert api_v1_router.prefix == "/api/v1"
-    assert api_v1_router.routes == []
+    assert api_v1_paths == {"/api/v1/tenants/{tenant_id}/resources"}
     assert "/api/v1/resources" not in route_paths
-    assert not any(path.startswith("/api/v1/tenants/") for path in route_paths)
+    assert [route.path for route in resource_routes] == [
+        "/api/v1/tenants/{tenant_id}/resources"
+    ]
+    assert resource_routes[0].response_model is ResourcePageResponse
