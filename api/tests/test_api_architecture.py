@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 from pathlib import Path
 from typing import get_type_hints
 
@@ -41,6 +42,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APP_ROOT = ROOT / "app"
 APPLICATION_ROOT = APP_ROOT / "application"
 API_ROOT = APP_ROOT / "api"
+API_MAPPERS_ROOT = API_ROOT / "mappers"
 API_ROUTES_ROOT = API_ROOT / "routes"
 API_COMPOSITION_PATH = API_ROOT / "composition.py"
 MAIN_PATH = APP_ROOT / "main.py"
@@ -68,6 +70,24 @@ FORBIDDEN_ROUTE_SQLALCHEMY_NAMES = {
     "SessionLocal",
     "create_engine",
     "sessionmaker",
+}
+FORBIDDEN_SCHEMA_MODULE_PREFIXES = {
+    "app.db",
+    "app.models",
+    "app.persistence",
+    "sqlalchemy",
+}
+FORBIDDEN_GENERIC_SERIALIZER_NAMES = {
+    "SerializerRegistry",
+    "serializer_registry",
+    "serialize",
+}
+FORBIDDEN_OFFSET_PAGINATION_NAMES = {
+    "limit",
+    "offset",
+    "page_number",
+    "total_count",
+    "total_pages",
 }
 FORBIDDEN_PROVIDER_CALL_NAMES = {
     "Session",
@@ -143,6 +163,15 @@ def _source_contains(path: Path, values: set[str]) -> set[str]:
     return {value for value in values if value in source}
 
 
+def _source_contains_word(path: Path, values: set[str]) -> set[str]:
+    source = path.read_text(encoding="utf-8")
+    return {
+        value
+        for value in values
+        if re.search(rf"\b{re.escape(value)}\b", source) is not None
+    }
+
+
 def _call_names_for(function: object) -> set[str]:
     source = inspect.getsource(function)
     tree = ast.parse(source)
@@ -206,6 +235,55 @@ def test_api_schemas_are_pydantic_transport_contracts_not_orm_models() -> None:
     assert not any(
         imported.startswith("app.models") for imported in _imports_for(API_ROOT / "schemas.py")
     )
+
+
+def test_api_schema_modules_do_not_import_persistence_or_orm_models() -> None:
+    for path in [API_ROOT / "schemas.py", *_python_files(API_MAPPERS_ROOT)]:
+        imports = _imports_for(path)
+
+        assert not any(
+            imported == forbidden_prefix
+            or imported.startswith(f"{forbidden_prefix}.")
+            for imported in imports
+            for forbidden_prefix in FORBIDDEN_SCHEMA_MODULE_PREFIXES
+        ), path
+
+
+def test_api_mapping_helpers_are_api_owned_and_explicit() -> None:
+    for path in _python_files(API_MAPPERS_ROOT):
+        imports = _imports_for(path)
+        function_names = {
+            node.name
+            for node in ast.walk(_tree_for(path))
+            if isinstance(node, ast.FunctionDef)
+        }
+
+        assert path.relative_to(API_ROOT).parts[0] == "mappers"
+        if function_names:
+            assert any(
+                imported.startswith("app.application.results") for imported in imports
+            )
+            assert any(imported.startswith("app.api.schemas") for imported in imports)
+        assert "serialize" not in function_names
+
+
+def test_api_layer_does_not_enable_orm_auto_serialization_strategy() -> None:
+    for path in _python_files(API_ROOT):
+        source = path.read_text(encoding="utf-8")
+
+        assert "from_attributes=True" not in source
+        assert "from_attributes = True" not in source
+        assert ".model_validate(" not in source
+
+
+def test_api_layer_does_not_introduce_generic_serializer_registry() -> None:
+    for path in _python_files(API_ROOT):
+        assert not _source_contains(path, FORBIDDEN_GENERIC_SERIALIZER_NAMES), path
+
+
+def test_api_layer_does_not_introduce_offset_or_page_number_pagination() -> None:
+    for path in _python_files(API_ROOT):
+        assert not _source_contains_word(path, FORBIDDEN_OFFSET_PAGINATION_NAMES), path
 
 
 def test_persistence_wiring_is_confined_to_api_composition_boundary() -> None:
