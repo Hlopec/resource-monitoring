@@ -33,7 +33,7 @@ api/app/api/
   schemas.py
 ```
 
-`router.py` composes FastAPI routers. `routes/system.py` owns the existing `/` and `/health` endpoints. `schemas.py` owns Pydantic transport contracts, reusable scalar serialization policy, the Resource summary response, and the Resource cursor page envelope. `mappers/resources.py` owns explicit Resource application-result to API-schema mapping. `errors.py` records the HTTP status policy for application errors. `composition.py` is the explicit composition root where FastAPI dependencies wire application handlers to the application-facing `UnitOfWorkFactory`.
+`router.py` composes FastAPI routers. `routes/system.py` owns the existing `/` and `/health` endpoints. `schemas.py` owns Pydantic transport contracts, reusable scalar serialization policy, the Resource summary response, the Resource cursor page envelope, and the public API error envelope. `mappers/resources.py` owns explicit Resource application-result to API-schema mapping. `errors.py` owns centralized `ApplicationError` to HTTP response mapping. `composition.py` is the explicit composition root where FastAPI dependencies wire application handlers to the application-facing `UnitOfWorkFactory`.
 
 `api/app/main.py` remains bootstrap-oriented: it creates the FastAPI application and includes routers. It should not hold production endpoint logic, SQLAlchemy session access, repositories, or application use-case decisions.
 
@@ -260,20 +260,62 @@ The current architecture remains synchronous. Do not introduce `AsyncSession`, `
 
 ## Error Policy
 
+Stage `04.1.4` completes the API foundation error boundary:
+
+```text
+ApplicationError
+-> central FastAPI exception handler
+-> public API error envelope
+-> sanitized HTTP response
+```
+
+The public error envelope is deterministic:
+
+```json
+{
+  "error": {
+    "code": "validation_error",
+    "message": "Input validation failed",
+    "details": [
+      {
+        "field": "page_size",
+        "message": "must be <= 200"
+      }
+    ]
+  }
+}
+```
+
+`ApiErrorDetail` contains exactly `field` and `message`. `ApiError` contains exactly `code`, `message`, and `details`. `ApiErrorResponse` contains exactly `error`.
+
 Application errors are mapped at the API boundary:
 
 | Application error | HTTP policy |
 | --- | --- |
-| `ValidationError` | `422 Unprocessable Entity` |
-| `EntityNotFoundError` | `404 Not Found` |
-| `ConflictError` | `409 Conflict` |
-| `ConcurrentModificationError` | `409 Conflict` |
-| `TenantBoundaryError` | `404 Not Found` |
-| `PersistenceError` | `503 Service Unavailable` |
+| `ValidationError` | `422 Unprocessable Entity`, `validation_error` |
+| `EntityNotFoundError` | `404 Not Found`, `not_found` |
+| `ConflictError` | `409 Conflict`, `conflict` |
+| `ConcurrentModificationError` | `409 Conflict`, `concurrent_modification` |
+| `TenantBoundaryError` | `404 Not Found`, `not_found` |
+| `PersistenceError` | `503 Service Unavailable`, `service_unavailable` |
 
 HTTP responses must not expose SQLAlchemy exception types, PostgreSQL constraint names, raw SQL, stack traces, or cross-tenant existence details. Error messages may describe the application-level failure but must not reveal whether a missing tenant-scoped entity exists in another tenant.
 
-This stage records the policy in `app.api.errors`; full exception handler registration and response body contracts are deferred until production endpoints need them.
+`ValidationError` preserves safe ordered `ValidationFailure.field` and `ValidationFailure.message` details. It does not expose the application exception message unless that message is separately chosen as public API text.
+
+`EntityNotFoundError` always returns the stable message `Requested resource was not found`. It does not expose `lookup_value`, tenant ids, lookup strategy, or cross-tenant metadata.
+
+`TenantBoundaryError` intentionally returns the same public envelope as `EntityNotFoundError`. This preserves non-disclosure: callers cannot learn whether an entity exists in another tenant.
+
+`ConflictError` returns a generic API conflict message and does not expose `constraint`, unique index names, SQLSTATE, or database messages. `ConcurrentModificationError` is checked before generic `ConflictError` so the subclass has deterministic `concurrent_modification` mapping.
+
+`PersistenceError` returns `Service is temporarily unavailable` with no details. It must never serialize `str(exc)`, `exc.__cause__`, SQLAlchemy errors, DBAPI errors, SQL text, query params, PostgreSQL details, SQLSTATE, stack traces, or constraint names.
+
+Unexpected exceptions are not normalized by this stage. They are left to standard FastAPI/Starlette 500 behavior so development and tests do not hide programming errors behind application-error envelopes.
+
+FastAPI/Pydantic `RequestValidationError` remains transport validation and is not converted into application `ValidationError` in this stage. Narrow request-validation envelope normalization may be added later when production endpoints need it.
+
+`register_application_error_handlers(app)` is called from `api/app/main.py`. Future route code should let application errors propagate and must not add route-local `try/except ApplicationError` translation.
 
 ## OpenAPI Policy
 
@@ -291,6 +333,12 @@ Architecture tests enforce:
 - broad `from_attributes=True` ORM serialization is not introduced;
 - generic serializer registries or reflection mappers are not introduced;
 - offset, page-number, total-count, and total-pages pagination models are not introduced;
+- API error schemas contain no `constraint`, `sql`, `sqlstate`, `traceback`, `exception`, or `cause` fields;
+- API error modules do not import SQLAlchemy, `app.persistence`, or `app.db`;
+- route modules do not catch `ApplicationError` locally;
+- application exception handlers are registered centrally from bootstrap;
+- `ConcurrentModificationError` has specific mapping and is not shadowed by `ConflictError`;
+- tenant-boundary mapping is not more revealing than ordinary not-found;
 - persistence wiring inside the API package is confined to `app.api.composition`;
 - explicit provider functions exist for the current Resource handler inventory;
 - provider return annotations are concrete application handler types;
@@ -304,4 +352,4 @@ Architecture tests enforce:
 
 ## Deferred Work
 
-Deferred work includes `04.1.4` application error to HTTP mapping, production Resource endpoints, full Resource details/history/relationship schema families, complete error response bodies, OpenAPI operation metadata hardening, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
+Stage `04.1` is now complete. Deferred work includes `04.2.1` Resource List API, full Resource details/history/relationship schema families, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.

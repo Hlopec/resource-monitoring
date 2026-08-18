@@ -12,8 +12,14 @@ from pydantic import BaseModel
 
 import app.api.composition as composition
 from app.api.composition import get_unit_of_work_factory
+from app.api.errors import (
+    api_error_response_for,
+    application_error_status_code,
+)
 from app.api.router import api_v1_router
-from app.api.schemas import ApiSchema
+from app.api.schemas import ApiError, ApiErrorDetail, ApiErrorResponse, ApiSchema
+from app.application.errors import ConcurrentModificationError, ConflictError
+from app.application.errors import ApplicationError
 from app.application.handlers import (
     AssignResourceAliasHandler,
     AssignResourceClassificationHandler,
@@ -42,6 +48,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APP_ROOT = ROOT / "app"
 APPLICATION_ROOT = APP_ROOT / "application"
 API_ROOT = APP_ROOT / "api"
+API_ERRORS_PATH = API_ROOT / "errors.py"
 API_MAPPERS_ROOT = API_ROOT / "mappers"
 API_ROUTES_ROOT = API_ROOT / "routes"
 API_COMPOSITION_PATH = API_ROOT / "composition.py"
@@ -81,6 +88,14 @@ FORBIDDEN_GENERIC_SERIALIZER_NAMES = {
     "SerializerRegistry",
     "serializer_registry",
     "serialize",
+}
+FORBIDDEN_PUBLIC_ERROR_FIELD_NAMES = {
+    "cause",
+    "constraint",
+    "exception",
+    "sql",
+    "sqlstate",
+    "traceback",
 }
 FORBIDDEN_OFFSET_PAGINATION_NAMES = {
     "limit",
@@ -185,6 +200,19 @@ def _call_names_for(function: object) -> set[str]:
     return names
 
 
+def _except_handler_names_for(path: Path) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(_tree_for(path)):
+        if isinstance(node, ast.ExceptHandler):
+            if isinstance(node.type, ast.Name):
+                names.add(node.type.id)
+            elif isinstance(node.type, ast.Tuple):
+                names.update(
+                    item.id for item in node.type.elts if isinstance(item, ast.Name)
+                )
+    return names
+
+
 def test_application_layer_does_not_import_api_or_transport_frameworks() -> None:
     for path in _python_files(APPLICATION_ROOT):
         imports = _imports_for(path)
@@ -247,6 +275,65 @@ def test_api_schema_modules_do_not_import_persistence_or_orm_models() -> None:
             for imported in imports
             for forbidden_prefix in FORBIDDEN_SCHEMA_MODULE_PREFIXES
         ), path
+
+
+def test_api_error_module_does_not_import_persistence_or_sqlalchemy() -> None:
+    imports = _imports_for(API_ERRORS_PATH)
+
+    assert not any(imported.split(".", 1)[0] == "sqlalchemy" for imported in imports)
+    assert not any(imported.startswith("app.persistence") for imported in imports)
+    assert not any(imported.startswith("app.db") for imported in imports)
+
+
+def test_api_error_schemas_are_api_owned_and_sanitized() -> None:
+    assert issubclass(ApiErrorDetail, ApiSchema)
+    assert issubclass(ApiError, ApiSchema)
+    assert issubclass(ApiErrorResponse, ApiSchema)
+    assert set(ApiErrorDetail.model_fields) == {"field", "message"}
+    assert set(ApiError.model_fields) == {"code", "message", "details"}
+    assert set(ApiErrorResponse.model_fields) == {"error"}
+    assert FORBIDDEN_PUBLIC_ERROR_FIELD_NAMES.isdisjoint(ApiError.model_fields)
+    assert FORBIDDEN_PUBLIC_ERROR_FIELD_NAMES.isdisjoint(ApiErrorDetail.model_fields)
+    assert FORBIDDEN_PUBLIC_ERROR_FIELD_NAMES.isdisjoint(ApiErrorResponse.model_fields)
+
+
+def test_routes_do_not_catch_application_errors_locally() -> None:
+    for path in _python_files(API_ROUTES_ROOT):
+        caught_names = _except_handler_names_for(path)
+
+        assert "ApplicationError" not in caught_names, path
+
+
+def test_application_error_handlers_are_centrally_registered_from_bootstrap() -> None:
+    imports = _imports_for(MAIN_PATH)
+
+    assert "app.api.errors" in imports
+    assert ApplicationError in app.exception_handlers
+    assert not any(
+        "exception_handler" in _call_names_for(getattr(composition, provider_name))
+        for provider_name in RESOURCE_HANDLER_PROVIDERS
+    )
+
+
+def test_concurrent_modification_error_has_specific_mapping() -> None:
+    conflict = ConflictError("conflict")
+    concurrent = ConcurrentModificationError("concurrent")
+
+    assert application_error_status_code(conflict) == 409
+    assert application_error_status_code(concurrent) == 409
+    assert api_error_response_for(conflict).error.code == "conflict"
+    assert api_error_response_for(concurrent).error.code == "concurrent_modification"
+
+
+def test_tenant_boundary_policy_is_not_more_revealing_than_not_found() -> None:
+    from app.application.errors import EntityNotFoundError, TenantBoundaryError
+
+    not_found = api_error_response_for(EntityNotFoundError("missing"))
+    tenant_boundary = api_error_response_for(
+        TenantBoundaryError("other tenant exists")
+    )
+
+    assert tenant_boundary == not_found
 
 
 def test_api_mapping_helpers_are_api_owned_and_explicit() -> None:

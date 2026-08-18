@@ -39,6 +39,21 @@ class StatusResponse(ApiSchema):
     status: str
 
 
+class ApiErrorDetail(ApiSchema):
+    field: str
+    message: str
+
+
+class ApiError(ApiSchema):
+    code: str
+    message: str
+    details: list[ApiErrorDetail]
+
+
+class ApiErrorResponse(ApiSchema):
+    error: ApiError
+
+
 class ResourceSummaryResponse(ApiSchema):
     resource_id: UUID
     tenant_id: UUID
