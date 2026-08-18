@@ -3,13 +3,37 @@ from __future__ import annotations
 import ast
 import inspect
 from pathlib import Path
+from typing import get_type_hints
 
+from fastapi.params import Depends
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
+import app.api.composition as composition
 from app.api.composition import get_unit_of_work_factory
 from app.api.router import api_v1_router
 from app.api.schemas import ApiSchema
+from app.application.handlers import (
+    AssignResourceAliasHandler,
+    AssignResourceClassificationHandler,
+    AssignResourceIdentifierHandler,
+    AssignResourceLabelHandler,
+    AssignResourceOwnershipHandler,
+    AssignResourceRelationshipHandler,
+    CreateResourceHandler,
+    FindResourceByAliasHandler,
+    FindResourceByIdentifierHandler,
+    GetResourceByCanonicalNameHandler,
+    GetResourceByIdHandler,
+    GetResourceDetailsHandler,
+    GetResourceHistoryHandler,
+    GetResourceRelationshipsHandler,
+    ListResourcesHandler,
+    MergeResourceHandler,
+    ResolveCanonicalResourceHandler,
+    TransitionResourceStateHandler,
+)
+from app.application.ports import UnitOfWorkFactory
 from app.main import app
 from app.persistence.sqlalchemy import SQLAlchemyUnitOfWork
 
@@ -45,11 +69,42 @@ FORBIDDEN_ROUTE_SQLALCHEMY_NAMES = {
     "create_engine",
     "sessionmaker",
 }
+FORBIDDEN_PROVIDER_CALL_NAMES = {
+    "Session",
+    "SessionLocal",
+    "begin",
+    "commit",
+    "connect",
+    "execute",
+    "flush",
+    "rollback",
+    "sessionmaker",
+}
 FORBIDDEN_FRAMEWORK_NAMES = {
     "CommandBus",
     "HandlerRegistry",
     "Mediator",
     "ServiceLocator",
+}
+RESOURCE_HANDLER_PROVIDERS = {
+    "get_list_resources_handler": ListResourcesHandler,
+    "get_get_resource_by_id_handler": GetResourceByIdHandler,
+    "get_get_resource_details_handler": GetResourceDetailsHandler,
+    "get_get_resource_history_handler": GetResourceHistoryHandler,
+    "get_get_resource_relationships_handler": GetResourceRelationshipsHandler,
+    "get_get_resource_by_canonical_name_handler": GetResourceByCanonicalNameHandler,
+    "get_find_resource_by_identifier_handler": FindResourceByIdentifierHandler,
+    "get_find_resource_by_alias_handler": FindResourceByAliasHandler,
+    "get_resolve_canonical_resource_handler": ResolveCanonicalResourceHandler,
+    "get_create_resource_handler": CreateResourceHandler,
+    "get_transition_resource_state_handler": TransitionResourceStateHandler,
+    "get_assign_resource_identifier_handler": AssignResourceIdentifierHandler,
+    "get_assign_resource_ownership_handler": AssignResourceOwnershipHandler,
+    "get_assign_resource_classification_handler": AssignResourceClassificationHandler,
+    "get_assign_resource_label_handler": AssignResourceLabelHandler,
+    "get_assign_resource_relationship_handler": AssignResourceRelationshipHandler,
+    "get_assign_resource_alias_handler": AssignResourceAliasHandler,
+    "get_merge_resource_handler": MergeResourceHandler,
 }
 
 
@@ -86,6 +141,19 @@ def _imported_names_for(path: Path) -> set[str]:
 def _source_contains(path: Path, values: set[str]) -> set[str]:
     source = path.read_text(encoding="utf-8")
     return {value for value in values if value in source}
+
+
+def _call_names_for(function: object) -> set[str]:
+    source = inspect.getsource(function)
+    tree = ast.parse(source)
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                names.add(node.func.id)
+            elif isinstance(node.func, ast.Attribute):
+                names.add(node.func.attr)
+    return names
 
 
 def test_application_layer_does_not_import_api_or_transport_frameworks() -> None:
@@ -155,6 +223,37 @@ def test_persistence_wiring_is_confined_to_api_composition_boundary() -> None:
     assert get_unit_of_work_factory() is SQLAlchemyUnitOfWork
 
 
+def test_resource_handler_providers_are_explicit_and_typed() -> None:
+    for provider_name, handler_type in RESOURCE_HANDLER_PROVIDERS.items():
+        provider = getattr(composition, provider_name)
+        signature = inspect.signature(provider)
+        hints = get_type_hints(provider)
+
+        assert hints["return"] is handler_type
+        assert list(signature.parameters) == ["uow_factory"]
+        parameter = signature.parameters["uow_factory"]
+        assert hints["uow_factory"] is UnitOfWorkFactory
+        assert isinstance(parameter.default, Depends)
+        assert parameter.default.dependency is get_unit_of_work_factory
+
+
+def test_resource_handler_providers_do_not_own_session_or_transaction_lifecycle() -> None:
+    for provider_name in RESOURCE_HANDLER_PROVIDERS:
+        provider = getattr(composition, provider_name)
+        called_names = _call_names_for(provider)
+
+        assert FORBIDDEN_PROVIDER_CALL_NAMES.isdisjoint(called_names), provider_name
+
+
+def test_resource_handler_providers_are_not_global_singletons() -> None:
+    handler_types = tuple(RESOURCE_HANDLER_PROVIDERS.values())
+
+    assert not any(
+        isinstance(value, handler_types)
+        for value in vars(composition).values()
+    )
+
+
 def test_no_bus_mediator_registry_or_service_locator_is_introduced() -> None:
     for path in _python_files(APP_ROOT):
         assert not _source_contains(path, FORBIDDEN_FRAMEWORK_NAMES), path
@@ -192,3 +291,4 @@ def test_api_v1_router_baseline_is_composable_without_resource_endpoints() -> No
     assert api_v1_router.prefix == "/api/v1"
     assert api_v1_router.routes == []
     assert "/api/v1/resources" not in route_paths
+    assert not any(path.startswith("/api/v1/tenants/") for path in route_paths)

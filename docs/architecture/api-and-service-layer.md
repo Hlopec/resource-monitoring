@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Stage `04.1.1` defines the first API and service-layer architecture baseline. It does not introduce production Resource endpoints. The baseline establishes where FastAPI code lives, how HTTP transport code will call application handlers, how application errors will be translated to HTTP responses, and which dependencies are forbidden across boundaries.
+Stage `04.1.1` defines the first API and service-layer architecture baseline. Stage `04.1.2` adds explicit FastAPI dependency wiring for the existing Block 03 Resource handlers without adding production Resource endpoints. The baseline establishes where FastAPI code lives, how HTTP transport code will call application handlers, how application errors will be translated to HTTP responses, and which dependencies are forbidden across boundaries.
 
 The accepted dependency direction is:
 
@@ -33,7 +33,7 @@ api/app/api/
   schemas.py
 ```
 
-`router.py` composes FastAPI routers. `routes/system.py` owns the existing `/` and `/health` endpoints. `schemas.py` owns Pydantic transport response contracts used by those endpoints. `errors.py` records the HTTP status policy for application errors. `composition.py` is the explicit boundary where future FastAPI dependencies may wire application handlers to `SQLAlchemyUnitOfWork`.
+`router.py` composes FastAPI routers. `routes/system.py` owns the existing `/` and `/health` endpoints. `schemas.py` owns Pydantic transport response contracts used by those endpoints. `errors.py` records the HTTP status policy for application errors. `composition.py` is the explicit composition root where FastAPI dependencies wire application handlers to the application-facing `UnitOfWorkFactory`.
 
 `api/app/main.py` remains bootstrap-oriented: it creates the FastAPI application and includes routers. It should not hold production endpoint logic, SQLAlchemy session access, repositories, or application use-case decisions.
 
@@ -115,6 +115,85 @@ SQLAlchemyUnitOfWork / UnitOfWorkFactory
 
 No command bus, mediator, handler registry, service locator, automatic handler discovery, generic IoC framework, or auto-scanning mechanism is part of this baseline.
 
+Stage `04.1.2` keeps composition in the single `api/app/api/composition.py` module because the current wiring is still small and easier to audit in one place. This module is the only API package module that imports `SQLAlchemyUnitOfWork`.
+
+## Dependency Wiring
+
+The Unit of Work dependency is:
+
+```python
+def get_unit_of_work_factory() -> UnitOfWorkFactory:
+    return SQLAlchemyUnitOfWork
+```
+
+The public return type is the application-facing `UnitOfWorkFactory`. Returning the `SQLAlchemyUnitOfWork` class is intentional: it is a factory reference, not an open Unit of Work. Resolving this dependency must not create a SQLAlchemy session, begin a transaction, enter a Unit of Work, execute SQL, commit, roll back, or flush.
+
+Every Resource handler provider is explicit and typed:
+
+```python
+def get_list_resources_handler(
+    uow_factory: UnitOfWorkFactory = Depends(get_unit_of_work_factory),
+) -> ListResourcesHandler:
+    return ListResourcesHandler(uow_factory)
+```
+
+There is no generic handler factory, registry, container, mediator, command bus, service locator, reflection-based registration, or shared base provider. The visible provider inventory is the audit mechanism.
+
+The current Resource handler providers are:
+
+| Provider | Handler |
+| --- | --- |
+| `get_list_resources_handler` | `ListResourcesHandler` |
+| `get_get_resource_by_id_handler` | `GetResourceByIdHandler` |
+| `get_get_resource_details_handler` | `GetResourceDetailsHandler` |
+| `get_get_resource_history_handler` | `GetResourceHistoryHandler` |
+| `get_get_resource_relationships_handler` | `GetResourceRelationshipsHandler` |
+| `get_get_resource_by_canonical_name_handler` | `GetResourceByCanonicalNameHandler` |
+| `get_find_resource_by_identifier_handler` | `FindResourceByIdentifierHandler` |
+| `get_find_resource_by_alias_handler` | `FindResourceByAliasHandler` |
+| `get_resolve_canonical_resource_handler` | `ResolveCanonicalResourceHandler` |
+| `get_create_resource_handler` | `CreateResourceHandler` |
+| `get_transition_resource_state_handler` | `TransitionResourceStateHandler` |
+| `get_assign_resource_identifier_handler` | `AssignResourceIdentifierHandler` |
+| `get_assign_resource_ownership_handler` | `AssignResourceOwnershipHandler` |
+| `get_assign_resource_classification_handler` | `AssignResourceClassificationHandler` |
+| `get_assign_resource_label_handler` | `AssignResourceLabelHandler` |
+| `get_assign_resource_relationship_handler` | `AssignResourceRelationshipHandler` |
+| `get_assign_resource_alias_handler` | `AssignResourceAliasHandler` |
+| `get_merge_resource_handler` | `MergeResourceHandler` |
+
+`EnsureResourceExistsHandler` remains an internal application architecture/reference handler and is not wired as a Block 04 Resource API dependency.
+
+## Dependency Overrides
+
+The wiring uses standard FastAPI dependency semantics. Tests and future route tests can replace the Unit of Work factory with:
+
+```python
+app.dependency_overrides[get_unit_of_work_factory] = fake_factory_provider
+```
+
+They can also replace one explicit handler provider:
+
+```python
+app.dependency_overrides[get_list_resources_handler] = fake_handler_provider
+```
+
+No monkeypatching of `app.persistence.sqlalchemy`, SQLAlchemy sessions, engines, or repository internals should be required for API dependency tests.
+
+## Handler Lifetime and Transactions
+
+Handler providers return fresh handler instances. They do not cache handlers, Unit of Work instances, SQLAlchemy sessions, repositories, or transaction contexts in module-level globals.
+
+FastAPI dependencies do not own transaction lifecycle. Application handlers keep the Block 03 transaction semantics:
+
+- read handlers create one fresh Unit of Work per `handle(...)` call, perform read-only work, avoid write locks, and do not commit;
+- write handlers create one fresh Unit of Work per `handle(...)` call and commit exactly once as the final successful persistence operation;
+- rollback and cleanup remain owned by the Unit of Work context manager.
+
+The API layer must not wrap handler execution in an extra Unit of Work, retry framework, transaction context, background task abstraction, or async SQLAlchemy layer.
+
+The current architecture remains synchronous. Do not introduce `AsyncSession`, `create_async_engine`, async repositories, async Unit of Work implementations, or thread-pool wrappers as part of this boundary.
+
 ## Error Policy
 
 Application errors are mapped at the API boundary:
@@ -154,6 +233,11 @@ Architecture tests enforce:
 - API route modules do not import SQLAlchemy APIs, ORM models, `app.db`, or concrete persistence;
 - API schemas are Pydantic transport contracts and not ORM-backed response models;
 - persistence wiring inside the API package is confined to `app.api.composition`;
+- explicit provider functions exist for the current Resource handler inventory;
+- provider return annotations are concrete application handler types;
+- provider parameters depend on `UnitOfWorkFactory` through `Depends(get_unit_of_work_factory)`;
+- providers do not open sessions, enter Unit of Work contexts, or call `commit()`, `rollback()`, or `flush()`;
+- handler providers produce fresh instances and no global handler singletons are introduced;
 - `main.py` stays bootstrap-oriented;
 - the FastAPI app imports and keeps `/` and `/health` working;
 - the `/api/v1` router baseline is composable without Resource endpoints;
@@ -161,4 +245,4 @@ Architecture tests enforce:
 
 ## Deferred Work
 
-Deferred work includes production Resource endpoints, full Resource request/response schemas, complete error response bodies, exception handler registration, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
+Deferred work includes production Resource endpoints, common API schemas and serialization policy hardening in `04.1.3`, full Resource request/response schemas, complete error response bodies, exception handler registration, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
