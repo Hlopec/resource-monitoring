@@ -4,11 +4,18 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends
 
-from app.api.composition import get_list_resources_handler
-from app.api.mappers import resource_page_response
-from app.api.schemas import ResourcePageResponse
-from app.application.handlers import ListResourcesHandler
-from app.application.queries import DEFAULT_RESOURCE_PAGE_SIZE, ListResourcesQuery
+from app.api.composition import (
+    get_get_resource_details_handler,
+    get_list_resources_handler,
+)
+from app.api.mappers import resource_details_response, resource_page_response
+from app.api.schemas import ResourceDetailsResponse, ResourcePageResponse
+from app.application.handlers import GetResourceDetailsHandler, ListResourcesHandler
+from app.application.queries import (
+    DEFAULT_RESOURCE_PAGE_SIZE,
+    GetResourceDetailsQuery,
+    ListResourcesQuery,
+)
 
 router = APIRouter(tags=["resources"])
 
@@ -42,3 +49,20 @@ def list_resources(
         cursor=cursor,
     )
     return resource_page_response(handler.handle(query))
+
+
+@router.get(
+    "/tenants/{tenant_id}/resources/{resource_id}",
+    response_model=ResourceDetailsResponse,
+    summary="Get tenant resource details",
+)
+def get_resource_details(
+    tenant_id: UUID,
+    resource_id: UUID,
+    handler: GetResourceDetailsHandler = Depends(get_get_resource_details_handler),
+) -> ResourceDetailsResponse:
+    query = GetResourceDetailsQuery(
+        tenant_id=tenant_id,
+        resource_id=resource_id,
+    )
+    return resource_details_response(handler.handle(query))

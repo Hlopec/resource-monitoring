@@ -22,6 +22,7 @@ from app.api.schemas import (
     ApiErrorDetail,
     ApiErrorResponse,
     ApiSchema,
+    ResourceDetailsResponse,
     ResourcePageResponse,
 )
 from app.application.errors import ConcurrentModificationError, ConflictError
@@ -126,6 +127,12 @@ FORBIDDEN_FRAMEWORK_NAMES = {
     "HandlerRegistry",
     "Mediator",
     "ServiceLocator",
+}
+FORBIDDEN_RESOURCE_ROUTE_NAMES = {
+    "ResourceQueryService",
+    "ResolveCanonicalResourceHandler",
+    "ResolveCanonicalResourceQuery",
+    "get_resolve_canonical_resource_handler",
 }
 RESOURCE_HANDLER_PROVIDERS = {
     "get_list_resources_handler": ListResourcesHandler,
@@ -249,6 +256,14 @@ def test_api_route_modules_do_not_import_sqlalchemy_models_or_persistence() -> N
             for imported in imports
         ), path
         assert FORBIDDEN_ROUTE_SQLALCHEMY_NAMES.isdisjoint(imported_names), path
+
+
+def test_resource_routes_do_not_bypass_handlers_or_resolve_canonical_resources() -> None:
+    resource_route_path = API_ROUTES_ROOT / "resources.py"
+    imported_names = _imported_names_for(resource_route_path)
+
+    assert FORBIDDEN_RESOURCE_ROUTE_NAMES.isdisjoint(imported_names)
+    assert not _source_contains(resource_route_path, FORBIDDEN_RESOURCE_ROUTE_NAMES)
 
 
 def test_api_schemas_are_pydantic_transport_contracts_not_orm_models() -> None:
@@ -456,7 +471,7 @@ def test_fastapi_app_imports_and_existing_system_routes_work() -> None:
     assert health_response.json() == {"status": "healthy"}
 
 
-def test_api_v1_router_contains_only_resource_list_production_endpoint() -> None:
+def test_api_v1_router_contains_only_resource_list_and_details_production_endpoints() -> None:
     route_paths = {route.path for route in app.routes}
     api_v1_paths = {route.path for route in api_v1_router.routes}
     resource_routes = [
@@ -466,9 +481,14 @@ def test_api_v1_router_contains_only_resource_list_production_endpoint() -> None
     ]
 
     assert api_v1_router.prefix == "/api/v1"
-    assert api_v1_paths == {"/api/v1/tenants/{tenant_id}/resources"}
+    assert api_v1_paths == {
+        "/api/v1/tenants/{tenant_id}/resources",
+        "/api/v1/tenants/{tenant_id}/resources/{resource_id}",
+    }
     assert "/api/v1/resources" not in route_paths
     assert [route.path for route in resource_routes] == [
-        "/api/v1/tenants/{tenant_id}/resources"
+        "/api/v1/tenants/{tenant_id}/resources",
+        "/api/v1/tenants/{tenant_id}/resources/{resource_id}",
     ]
     assert resource_routes[0].response_model is ResourcePageResponse
+    assert resource_routes[1].response_model is ResourceDetailsResponse

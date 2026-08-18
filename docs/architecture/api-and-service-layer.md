@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Stage `04.1.1` defines the first API and service-layer architecture baseline. Stage `04.1.2` adds explicit FastAPI dependency wiring for the existing Block 03 Resource handlers without adding production Resource endpoints. The baseline establishes where FastAPI code lives, how HTTP transport code will call application handlers, how application errors will be translated to HTTP responses, and which dependencies are forbidden across boundaries.
+Stage `04.1.1` defines the first API and service-layer architecture baseline. Stage `04.1.2` adds explicit FastAPI dependency wiring for the existing Block 03 Resource handlers without adding production Resource endpoints. Stage `04.2` starts production Resource read routes with list and details endpoints. The baseline establishes where FastAPI code lives, how HTTP transport code will call application handlers, how application errors will be translated to HTTP responses, and which dependencies are forbidden across boundaries.
 
 The accepted dependency direction is:
 
@@ -129,7 +129,7 @@ Application results may use immutable tuples. Explicit API mappers convert those
 
 ## Resource Transport Primitives
 
-The current reusable Resource transport shape is `ResourceSummaryResponse`, matching `ResourceSummaryResult` exactly:
+The current reusable Resource list transport shape is `ResourceSummaryResponse`, matching `ResourceSummaryResult` exactly:
 
 | Field | Type |
 | --- | --- |
@@ -162,6 +162,14 @@ Explicit mapping functions live in `app.api.mappers.resources`:
 
 - `resource_summary_response(result: ResourceSummaryResult) -> ResourceSummaryResponse`
 - `resource_page_response(result: ResourcePageResult) -> ResourcePageResponse`
+- `resource_state_response(result: ResourceStateResult) -> ResourceStateResponse`
+- `resource_identifier_response(result: ResourceIdentifierResult) -> ResourceIdentifierResponse`
+- `resource_ownership_response(result: ResourceOwnershipResult) -> ResourceOwnershipResponse`
+- `resource_classification_response(result: ResourceClassificationResult) -> ResourceClassificationResponse`
+- `resource_label_response(result: ResourceLabelResult) -> ResourceLabelResponse`
+- `resource_alias_response(result: ResourceAliasResult) -> ResourceAliasResponse`
+- `resource_merge_response(result: ResourceMergeResult) -> ResourceMergeResponse`
+- `resource_details_response(result: ResourceDetailsResult) -> ResourceDetailsResponse`
 
 These functions construct response schemas field by field. There is no generic serializer, serializer registry, reflection mapper, DTO framework, or `model_validate(..., from_attributes=True)` shortcut over arbitrary objects.
 
@@ -319,7 +327,7 @@ FastAPI/Pydantic `RequestValidationError` remains transport validation and is no
 
 ## Resource List API
 
-Stage `04.2` starts the production Resource Read API with exactly one endpoint:
+Stage `04.2` starts the production Resource Read API. The list endpoint is:
 
 ```http
 GET /api/v1/tenants/{tenant_id}/resources
@@ -371,6 +379,108 @@ The route depends on `get_list_resources_handler`. It does not instantiate `List
 
 Authentication and authorization remain deferred.
 
+## Resource Details API
+
+Stage `04.2.2` adds the Resource Details endpoint:
+
+```http
+GET /api/v1/tenants/{tenant_id}/resources/{resource_id}
+```
+
+The route is a thin transport adapter:
+
+```text
+HTTP path params
+-> FastAPI UUID parsing
+-> GetResourceDetailsQuery
+-> GetResourceDetailsHandler
+-> ResourceDetailsResult
+-> resource_details_response(...)
+-> ResourceDetailsResponse
+```
+
+The route constructs the application query explicitly:
+
+```python
+GetResourceDetailsQuery(
+    tenant_id=tenant_id,
+    resource_id=resource_id,
+)
+```
+
+Both path values are parsed by FastAPI as native `UUID` values and passed directly into the query. There is no ambient tenant, default tenant, query-parameter tenant override, preflight tenant/resource existence check, repository access, direct `ResourceQueryService` call, or route-local transaction.
+
+The route depends on `get_get_resource_details_handler`, which returns `GetResourceDetailsHandler` from the API composition boundary. Route code does not instantiate handlers directly, resolve `UnitOfWorkFactory`, import `SQLAlchemyUnitOfWork`, import repositories, or catch `ApplicationError`.
+
+The response schema is `ResourceDetailsResponse`, matching `ResourceDetailsResult` exactly:
+
+| Field | Type |
+| --- | --- |
+| `id` | `UUID` |
+| `tenant_id` | `UUID` |
+| `organization_id` | `UUID | None` |
+| `resource_type_id` | `UUID` |
+| `canonical_name` | `str` |
+| `display_name` | `str` |
+| `record_version` | `int` |
+| `created_at` | `AwareDatetime` |
+| `updated_at` | `AwareDatetime` |
+| `state` | `ResourceStateResponse | None` |
+| `identifiers` | `list[ResourceIdentifierResponse]` |
+| `ownership` | `list[ResourceOwnershipResponse]` |
+| `classifications` | `list[ResourceClassificationResponse]` |
+| `labels` | `list[ResourceLabelResponse]` |
+| `aliases` | `list[ResourceAliasResponse]` |
+| `outgoing_merge` | `ResourceMergeResponse | None` |
+
+Nested response shapes are also exact API-owned projections of current application results:
+
+| Schema | Fields |
+| --- | --- |
+| `ResourceStateResponse` | `id`, `lifecycle_status_id`, `criticality_id`, `exposure_level_id`, `source_priority`, `confidence_score`, `valid_from`, `source` |
+| `ResourceIdentifierResponse` | `id`, `identifier_type_id`, `namespace`, `normalized_value`, `original_value`, `is_primary`, `confidence_score`, `valid_from` |
+| `ResourceOwnershipResponse` | `id`, `organization_id`, `ownership_role_id`, `is_primary`, `confidence_score`, `valid_from`, `source` |
+| `ResourceClassificationResponse` | `id`, `classification_type_id`, `classification_value_id`, `is_primary`, `confidence_score`, `valid_from`, `source` |
+| `ResourceLabelResponse` | `id`, `label_id`, `valid_from`, `source` |
+| `ResourceAliasResponse` | `id`, `alias_type`, `alias_value`, `normalized_value`, `source`, `first_seen_at`, `last_seen_at` |
+| `ResourceMergeResponse` | `id`, `source_resource_id`, `target_resource_id`, `reason`, `source`, `merged_at` |
+
+Tuples from application results are converted to ordered JSON arrays without sorting. `None` remains JSON `null`. `UUID`, `AwareDatetime`, and `ApiDecimal` reuse the common serialization policy.
+
+Example response shape:
+
+```json
+{
+  "id": "0198a4a2-0000-7000-8000-000000000001",
+  "tenant_id": "0198a4a2-0000-7000-8000-000000000002",
+  "organization_id": null,
+  "resource_type_id": "0198a4a2-0000-7000-8000-000000000003",
+  "canonical_name": "app01.example.com",
+  "display_name": "Application 01",
+  "record_version": 7,
+  "created_at": "2026-08-19T10:00:00Z",
+  "updated_at": "2026-08-19T10:01:00Z",
+  "state": null,
+  "identifiers": [],
+  "ownership": [],
+  "classifications": [],
+  "labels": [],
+  "aliases": [],
+  "outgoing_merge": null
+}
+```
+
+Malformed `tenant_id` or `resource_id` values are FastAPI transport validation errors. Missing resources and wrong-tenant resources are handled by application errors and centralized API error translation as the same non-disclosing `404 not_found` envelope. Persistence failures propagate to the centralized `503 service_unavailable` envelope without SQL, SQLSTATE, constraint names, or stack traces.
+
+The details endpoint does not automatically resolve canonical resources. It does not call `ResolveCanonicalResourceHandler`, construct `ResolveCanonicalResourceQuery`, redirect, perform a second details lookup against a canonical target, or replace the requested `resource_id`. If `ResourceDetailsResult.outgoing_merge` is present, the route exposes that exact direct merge projection while keeping `id` equal to the requested resource details result.
+
+The current production Resource route inventory is exactly:
+
+```text
+GET /api/v1/tenants/{tenant_id}/resources
+GET /api/v1/tenants/{tenant_id}/resources/{resource_id}
+```
+
 ## OpenAPI Policy
 
 OpenAPI tags, operation ids, status codes, examples, and schema metadata belong to API modules only. Application commands, queries, handlers, and results must remain unaware of OpenAPI. Stage `04.1.3` only verifies that common schemas can be included in generated OpenAPI components; operation metadata hardening remains deferred.
@@ -401,10 +511,11 @@ Architecture tests enforce:
 - handler providers produce fresh instances and no global handler singletons are introduced;
 - `main.py` stays bootstrap-oriented;
 - the FastAPI app imports and keeps `/` and `/health` working;
-- the `/api/v1` production Resource route inventory contains only `GET /api/v1/tenants/{tenant_id}/resources`;
+- the `/api/v1` production Resource route inventory contains only `GET /api/v1/tenants/{tenant_id}/resources` and `GET /api/v1/tenants/{tenant_id}/resources/{resource_id}`;
+- Resource routes do not import or call canonical resolution handlers, queries, or providers;
 - Resource routes use API-owned response models and do not call transaction methods;
 - command bus, mediator, handler registry, and service locator patterns are not introduced.
 
 ## Deferred Work
 
-Stage `04.1` is complete and Stage `04.2` has started. Deferred work includes `04.2.2` Resource Details API, Resource history/relationship endpoints, identity lookup endpoints, canonical resolution, write endpoints, full Resource details/history/relationship schema families, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
+Stage `04.1` is complete and Stage `04.2` has list and details Resource read endpoints. The next planned step is `04.2.3 — Implement Resource History API`. Deferred work includes Resource history/relationship endpoints, identity lookup endpoints, canonical resolution endpoints, write endpoints, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
