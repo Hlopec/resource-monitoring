@@ -73,3 +73,90 @@ class ResourceSummaryResponse(ApiSchema):
 class ResourcePageResponse(ApiSchema):
     items: list[ResourceSummaryResponse]
     next_cursor: str | None
+
+
+class ResourceStateResponse(ApiSchema):
+    id: UUID
+    lifecycle_status_id: UUID
+    criticality_id: UUID
+    exposure_level_id: UUID
+    source_priority: int
+    confidence_score: ApiDecimal
+    valid_from: AwareDatetime
+    source: str | None
+
+
+class ResourceIdentifierResponse(ApiSchema):
+    id: UUID
+    identifier_type_id: UUID
+    namespace: str | None
+    normalized_value: str
+    original_value: str
+    is_primary: bool
+    confidence_score: ApiDecimal
+    valid_from: AwareDatetime
+
+
+class ResourceOwnershipResponse(ApiSchema):
+    id: UUID
+    organization_id: UUID
+    ownership_role_id: UUID
+    is_primary: bool
+    confidence_score: ApiDecimal
+    valid_from: AwareDatetime
+    source: str | None
+
+
+class ResourceClassificationResponse(ApiSchema):
+    id: UUID
+    classification_type_id: UUID
+    classification_value_id: UUID
+    is_primary: bool
+    confidence_score: ApiDecimal
+    valid_from: AwareDatetime
+    source: str | None
+
+
+class ResourceLabelResponse(ApiSchema):
+    id: UUID
+    label_id: UUID
+    valid_from: AwareDatetime
+    source: str | None
+
+
+class ResourceAliasResponse(ApiSchema):
+    id: UUID
+    alias_type: str
+    alias_value: str
+    normalized_value: str
+    source: str | None
+    first_seen_at: AwareDatetime
+    last_seen_at: AwareDatetime
+
+
+class ResourceMergeResponse(ApiSchema):
+    id: UUID
+    source_resource_id: UUID
+    target_resource_id: UUID
+    reason: str | None
+    source: str | None
+    merged_at: AwareDatetime
+
+
+class ResourceDetailsResponse(ApiSchema):
+    id: UUID
+    tenant_id: UUID
+    organization_id: UUID | None
+    resource_type_id: UUID
+    canonical_name: str
+    display_name: str
+    record_version: int
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+    state: ResourceStateResponse | None
+    identifiers: list[ResourceIdentifierResponse]
+    ownership: list[ResourceOwnershipResponse]
+    classifications: list[ResourceClassificationResponse]
+    labels: list[ResourceLabelResponse]
+    aliases: list[ResourceAliasResponse]
+    outgoing_merge: ResourceMergeResponse | None
