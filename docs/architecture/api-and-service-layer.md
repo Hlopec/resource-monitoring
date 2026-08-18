@@ -33,7 +33,7 @@ api/app/api/
   schemas.py
 ```
 
-`router.py` composes FastAPI routers. `routes/system.py` owns the existing `/` and `/health` endpoints. `schemas.py` owns Pydantic transport response contracts used by those endpoints. `errors.py` records the HTTP status policy for application errors. `composition.py` is the explicit composition root where FastAPI dependencies wire application handlers to the application-facing `UnitOfWorkFactory`.
+`router.py` composes FastAPI routers. `routes/system.py` owns the existing `/` and `/health` endpoints. `schemas.py` owns Pydantic transport contracts, reusable scalar serialization policy, the Resource summary response, and the Resource cursor page envelope. `mappers/resources.py` owns explicit Resource application-result to API-schema mapping. `errors.py` records the HTTP status policy for application errors. `composition.py` is the explicit composition root where FastAPI dependencies wire application handlers to the application-facing `UnitOfWorkFactory`.
 
 `api/app/main.py` remains bootstrap-oriented: it creates the FastAPI application and includes routers. It should not hold production endpoint logic, SQLAlchemy session access, repositories, or application use-case decisions.
 
@@ -100,6 +100,70 @@ application Result -> Pydantic response schema
 ORM entities must not be returned as API schemas and should not be exposed through Pydantic `from_attributes` response models. The current API schemas set `from_attributes=False` to keep that boundary visible.
 
 Full Resource request and response schemas are deferred until production Resource endpoints are implemented.
+
+Stage `04.1.3` keeps the schema surface in `api/app/api/schemas.py` because the current API-owned contract set is still small. A separate schema package should be introduced only when multiple meaningful schema modules exist.
+
+`ApiSchema` is the API-owned Pydantic base. It does not inherit from ORM models or application dataclasses and keeps `from_attributes=False`. Broad ORM auto-loading is prohibited because it hides the transport/application boundary, can accidentally expose mapped fields, and encourages route code to return persistence objects.
+
+Transport validation is limited to HTTP/API shape concerns: UUID parsing, required and optional fields, scalar types, timezone-aware timestamp fields, and response shape. Application handlers remain authoritative for lifecycle rules, temporal invariants, merge rules, ownership and classification semantics, tenant business rules, conflict semantics, and persistence error translation.
+
+## Common Serialization Policy
+
+API serializers own JSON representation decisions:
+
+| Application value | JSON representation |
+| --- | --- |
+| `UUID` | canonical UUID string |
+| aware `datetime` | ISO-8601 string preserving the accepted timezone offset |
+| `Decimal` | string, to preserve precision and avoid binary floating point drift |
+| opaque cursor | unchanged string |
+| tuple | ordered JSON array |
+
+Timestamp fields representing application timestamps use the reusable API-owned `AwareDatetime` annotation. Naive datetimes are rejected; accepted values are not silently assigned a timezone, converted to the local server timezone, or normalized to UTC by the API schema layer.
+
+The Decimal policy is defined by the API-owned `ApiDecimal` scalar alias; future API schemas should use it for Decimal transport fields so JSON emits strings without converting through `float`.
+
+Application cursors remain opaque strings. API schemas expose only `next_cursor: str | None`; they do not decode, inspect, rebuild, or expose cursor internals.
+
+Application results may use immutable tuples. Explicit API mappers convert those tuples into response lists so JSON emits ordered arrays without mutating the application result objects.
+
+## Resource Transport Primitives
+
+The current reusable Resource transport shape is `ResourceSummaryResponse`, matching `ResourceSummaryResult` exactly:
+
+| Field | Type |
+| --- | --- |
+| `resource_id` | `UUID` |
+| `tenant_id` | `UUID` |
+| `resource_type_id` | `UUID` |
+| `lifecycle_status_id` | `UUID` |
+| `canonical_name` | `str` |
+| `display_name` | `str | None` |
+| `primary_organization_id` | `UUID | None` |
+| `primary_ownership_role_id` | `UUID | None` |
+| `record_version` | `int` |
+| `first_seen_at` | `AwareDatetime` |
+| `last_seen_at` | `AwareDatetime` |
+| `created_at` | `AwareDatetime` |
+| `updated_at` | `AwareDatetime` |
+
+The cursor page envelope is intentionally small:
+
+```json
+{
+  "items": [],
+  "next_cursor": null
+}
+```
+
+It does not expose `total_count`, `offset`, `page`, `page_number`, `limit`, or `total_pages` because those values are not part of the application result contract and would imply a different pagination model.
+
+Explicit mapping functions live in `app.api.mappers.resources`:
+
+- `resource_summary_response(result: ResourceSummaryResult) -> ResourceSummaryResponse`
+- `resource_page_response(result: ResourcePageResult) -> ResourcePageResponse`
+
+These functions construct response schemas field by field. There is no generic serializer, serializer registry, reflection mapper, DTO framework, or `model_validate(..., from_attributes=True)` shortcut over arbitrary objects.
 
 ## Composition Boundary
 
@@ -211,19 +275,9 @@ HTTP responses must not expose SQLAlchemy exception types, PostgreSQL constraint
 
 This stage records the policy in `app.api.errors`; full exception handler registration and response body contracts are deferred until production endpoints need them.
 
-## Serialization Policy
+## OpenAPI Policy
 
-API serializers own JSON representation decisions:
-
-| Application value | JSON representation |
-| --- | --- |
-| `UUID` | UUID string |
-| aware `datetime` | ISO-8601 string with timezone offset |
-| `Decimal` | string, to preserve precision and avoid binary floating point drift |
-| opaque cursor | unchanged string |
-| tuple | JSON array |
-
-OpenAPI tags, operation ids, status codes, examples, and schema metadata belong to API modules only. Application commands, queries, handlers, and results must remain unaware of OpenAPI.
+OpenAPI tags, operation ids, status codes, examples, and schema metadata belong to API modules only. Application commands, queries, handlers, and results must remain unaware of OpenAPI. Stage `04.1.3` only verifies that common schemas can be included in generated OpenAPI components; operation metadata hardening remains deferred.
 
 ## Safeguards
 
@@ -232,6 +286,11 @@ Architecture tests enforce:
 - application modules do not import FastAPI, Pydantic, Starlette, API modules, or concrete persistence;
 - API route modules do not import SQLAlchemy APIs, ORM models, `app.db`, or concrete persistence;
 - API schemas are Pydantic transport contracts and not ORM-backed response models;
+- API schema and mapper modules do not import SQLAlchemy, ORM models, or persistence adapters;
+- API mappers are API-owned and explicitly map application result fields into response schemas;
+- broad `from_attributes=True` ORM serialization is not introduced;
+- generic serializer registries or reflection mappers are not introduced;
+- offset, page-number, total-count, and total-pages pagination models are not introduced;
 - persistence wiring inside the API package is confined to `app.api.composition`;
 - explicit provider functions exist for the current Resource handler inventory;
 - provider return annotations are concrete application handler types;
@@ -245,4 +304,4 @@ Architecture tests enforce:
 
 ## Deferred Work
 
-Deferred work includes production Resource endpoints, common API schemas and serialization policy hardening in `04.1.3`, full Resource request/response schemas, complete error response bodies, exception handler registration, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
+Deferred work includes `04.1.4` application error to HTTP mapping, production Resource endpoints, full Resource details/history/relationship schema families, complete error response bodies, OpenAPI operation metadata hardening, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
