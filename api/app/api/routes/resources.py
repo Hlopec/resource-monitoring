@@ -7,27 +7,32 @@ from fastapi import APIRouter, Depends
 from app.api.composition import (
     get_get_resource_details_handler,
     get_get_resource_history_handler,
+    get_get_resource_relationships_handler,
     get_list_resources_handler,
 )
 from app.api.mappers import (
     resource_details_response,
     resource_history_response,
     resource_page_response,
+    resource_relationships_response,
 )
 from app.api.schemas import (
     ResourceDetailsResponse,
     ResourceHistoryResponse,
     ResourcePageResponse,
+    ResourceRelationshipsResponse,
 )
 from app.application.handlers import (
     GetResourceDetailsHandler,
     GetResourceHistoryHandler,
+    GetResourceRelationshipsHandler,
     ListResourcesHandler,
 )
 from app.application.queries import (
     DEFAULT_RESOURCE_PAGE_SIZE,
     GetResourceDetailsQuery,
     GetResourceHistoryQuery,
+    GetResourceRelationshipsQuery,
     ListResourcesQuery,
 )
 
@@ -97,3 +102,22 @@ def get_resource_history(
         resource_id=resource_id,
     )
     return resource_history_response(handler.handle(query))
+
+
+@router.get(
+    "/tenants/{tenant_id}/resources/{resource_id}/relationships",
+    response_model=ResourceRelationshipsResponse,
+    summary="Get tenant resource relationships",
+)
+def get_resource_relationships(
+    tenant_id: UUID,
+    resource_id: UUID,
+    handler: GetResourceRelationshipsHandler = Depends(
+        get_get_resource_relationships_handler
+    ),
+) -> ResourceRelationshipsResponse:
+    query = GetResourceRelationshipsQuery(
+        tenant_id=tenant_id,
+        resource_id=resource_id,
+    )
+    return resource_relationships_response(handler.handle(query))

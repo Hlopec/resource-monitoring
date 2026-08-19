@@ -227,3 +227,21 @@ class ResourceHistoryResponse(ApiSchema):
     labels: list[ResourceLabelHistoryResponse]
     classifications: list[ResourceClassificationHistoryResponse]
     identifiers: list[ResourceIdentifierHistoryResponse]
+
+
+class ResourceRelationshipResponse(ApiSchema):
+    id: UUID
+    relationship_type_id: UUID
+    source_resource_id: UUID
+    target_resource_id: UUID
+    direction: str
+    confidence_score: ApiDecimal
+    valid_from: AwareDatetime
+    source: str | None
+    created_at: AwareDatetime
+
+
+class ResourceRelationshipsResponse(ApiSchema):
+    resource_id: UUID
+    tenant_id: UUID
+    relationships: list[ResourceRelationshipResponse]
