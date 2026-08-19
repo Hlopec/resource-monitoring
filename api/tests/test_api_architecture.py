@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 import app.api.composition as composition
+import app.api.routes.resource_lookups as resource_lookup_routes
 import app.api.routes.resources as resource_routes
 from app.api.composition import get_unit_of_work_factory
 from app.api.errors import (
@@ -23,8 +24,11 @@ from app.api.schemas import (
     ApiErrorDetail,
     ApiErrorResponse,
     ApiSchema,
+    CanonicalResourceResolvedResponse,
+    ResourceAliasLookupResponse,
     ResourceDetailsResponse,
     ResourceHistoryResponse,
+    ResourceIdentifierLookupResponse,
     ResourcePageResponse,
     ResourceRelationshipsResponse,
 )
@@ -133,9 +137,28 @@ FORBIDDEN_FRAMEWORK_NAMES = {
 }
 FORBIDDEN_RESOURCE_ROUTE_NAMES = {
     "ResourceQueryService",
+}
+FORBIDDEN_CANONICAL_ROUTE_NAMES = {
+    "GetResourceDetailsHandler",
+    "GetResourceDetailsQuery",
+    "get_get_resource_details_handler",
+    "GetResourceHistoryHandler",
+    "GetResourceHistoryQuery",
+    "get_get_resource_history_handler",
+    "GetResourceRelationshipsHandler",
+    "GetResourceRelationshipsQuery",
+    "get_get_resource_relationships_handler",
+    "AssignResourceRelationshipHandler",
+    "AssignResourceRelationshipCommand",
+    "ResourceQueryService",
+}
+FORBIDDEN_LOOKUP_ROUTE_NAMES = {
     "ResolveCanonicalResourceHandler",
     "ResolveCanonicalResourceQuery",
     "get_resolve_canonical_resource_handler",
+    "AssignResourceRelationshipHandler",
+    "AssignResourceRelationshipCommand",
+    "ResourceQueryService",
 }
 FORBIDDEN_HISTORY_ROUTE_NAMES = {
     "GetResourceDetailsHandler",
@@ -304,12 +327,15 @@ def test_api_route_modules_do_not_import_sqlalchemy_models_or_persistence() -> N
         assert FORBIDDEN_ROUTE_SQLALCHEMY_NAMES.isdisjoint(imported_names), path
 
 
-def test_resource_routes_do_not_bypass_handlers_or_resolve_canonical_resources() -> None:
-    resource_route_path = API_ROUTES_ROOT / "resources.py"
-    imported_names = _imported_names_for(resource_route_path)
+def test_resource_details_route_remains_isolated_from_canonical_resolution() -> None:
+    source = inspect.getsource(resource_routes.get_resource_details)
+    call_names = _call_names_for(resource_routes.get_resource_details)
 
-    assert FORBIDDEN_RESOURCE_ROUTE_NAMES.isdisjoint(imported_names)
-    assert not _source_contains(resource_route_path, FORBIDDEN_RESOURCE_ROUTE_NAMES)
+    assert "GetResourceDetailsQuery" in call_names
+    assert "resource_details_response" in call_names
+    assert "ResolveCanonicalResourceQuery" not in source
+    assert "get_resolve_canonical_resource_handler" not in source
+    assert "ResolveCanonicalResourceHandler" not in source
 
 
 def test_resource_history_route_is_isolated_from_details_and_canonical_use_cases() -> None:
@@ -382,6 +408,104 @@ def test_resource_relationships_route_is_current_read_only_and_one_hop() -> None
     assert "handle" in call_names
     assert not any(name in source for name in FORBIDDEN_RELATIONSHIPS_ROUTE_NAMES)
     assert not any(name in source for name in FORBIDDEN_GRAPH_TRAVERSAL_NAMES)
+
+
+def test_resource_canonical_route_is_explicit_and_does_not_enrich_or_write() -> None:
+    resource_route_path = API_ROUTES_ROOT / "resources.py"
+    canonical_function = _function_def_for(
+        resource_route_path,
+        "resolve_resource_canonical",
+    )
+    source = inspect.getsource(resource_routes.resolve_resource_canonical)
+    call_names = _call_names_for(resource_routes.resolve_resource_canonical)
+    signature = inspect.signature(resource_routes.resolve_resource_canonical)
+    handler_parameter = signature.parameters["handler"]
+
+    decorator = canonical_function.decorator_list[0]
+    assert isinstance(decorator, ast.Call)
+    assert isinstance(decorator.func, ast.Attribute)
+    assert decorator.func.attr == "get"
+    assert isinstance(decorator.args[0], ast.Constant)
+    assert decorator.args[0].value == (
+        "/tenants/{tenant_id}/resources/{resource_id}/canonical"
+    )
+    assert any(
+        keyword.arg == "response_model"
+        and isinstance(keyword.value, ast.Name)
+        and keyword.value.id == "CanonicalResourceResolvedResponse"
+        for keyword in decorator.keywords
+    )
+    assert list(signature.parameters) == ["tenant_id", "resource_id", "handler"]
+    assert isinstance(handler_parameter.default, Depends)
+    assert (
+        handler_parameter.default.dependency
+        is composition.get_resolve_canonical_resource_handler
+    )
+    assert "ResolveCanonicalResourceQuery" in call_names
+    assert "canonical_resource_resolved_response" in call_names
+    assert "handle" in call_names
+    assert "RedirectResponse" not in source
+    assert "HTTPException" not in source
+    assert not any(name in source for name in FORBIDDEN_CANONICAL_ROUTE_NAMES)
+
+
+def test_resource_lookup_routes_are_static_explicit_and_non_canonicalizing() -> None:
+    route_path = API_ROUTES_ROOT / "resource_lookups.py"
+    cases = [
+        (
+            resource_lookup_routes.get_resource_by_canonical_name,
+            "get_resource_by_canonical_name",
+            "/tenants/{tenant_id}/resource-lookups/canonical-name",
+            "ResourceDetailsResponse",
+            composition.get_get_resource_by_canonical_name_handler,
+            "GetResourceByCanonicalNameQuery",
+            "resource_details_response",
+        ),
+        (
+            resource_lookup_routes.find_resource_by_identifier,
+            "find_resource_by_identifier",
+            "/tenants/{tenant_id}/resource-lookups/identifier",
+            "ResourceIdentifierLookupResponse",
+            composition.get_find_resource_by_identifier_handler,
+            "FindResourceByIdentifierQuery",
+            "resource_identifier_lookup_response",
+        ),
+        (
+            resource_lookup_routes.find_resource_by_alias,
+            "find_resource_by_alias",
+            "/tenants/{tenant_id}/resource-lookups/alias",
+            "ResourceAliasLookupResponse",
+            composition.get_find_resource_by_alias_handler,
+            "FindResourceByAliasQuery",
+            "resource_alias_lookup_response",
+        ),
+    ]
+
+    for function, function_name, path, response_model, provider, query, mapper in cases:
+        function_def = _function_def_for(route_path, function_name)
+        source = inspect.getsource(function)
+        call_names = _call_names_for(function)
+        signature = inspect.signature(function)
+        handler_parameter = signature.parameters["handler"]
+        decorator = function_def.decorator_list[0]
+
+        assert isinstance(decorator, ast.Call)
+        assert isinstance(decorator.func, ast.Attribute)
+        assert decorator.func.attr == "get"
+        assert isinstance(decorator.args[0], ast.Constant)
+        assert decorator.args[0].value == path
+        assert any(
+            keyword.arg == "response_model"
+            and isinstance(keyword.value, ast.Name)
+            and keyword.value.id == response_model
+            for keyword in decorator.keywords
+        )
+        assert isinstance(handler_parameter.default, Depends)
+        assert handler_parameter.default.dependency is provider
+        assert query in call_names
+        assert mapper in call_names
+        assert "handle" in call_names
+        assert not any(name in source for name in FORBIDDEN_LOOKUP_ROUTE_NAMES)
 
 
 def test_api_schemas_are_pydantic_transport_contracts_not_orm_models() -> None:
@@ -600,19 +724,31 @@ def test_api_v1_router_contains_only_resource_read_endpoints() -> None:
 
     assert api_v1_router.prefix == "/api/v1"
     assert api_v1_paths == {
+        "/api/v1/tenants/{tenant_id}/resource-lookups/alias",
+        "/api/v1/tenants/{tenant_id}/resource-lookups/canonical-name",
+        "/api/v1/tenants/{tenant_id}/resource-lookups/identifier",
         "/api/v1/tenants/{tenant_id}/resources",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}",
+        "/api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/history",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships",
     }
     assert "/api/v1/resources" not in route_paths
     assert [route.path for route in resource_routes] == [
+        "/api/v1/tenants/{tenant_id}/resource-lookups/canonical-name",
+        "/api/v1/tenants/{tenant_id}/resource-lookups/identifier",
+        "/api/v1/tenants/{tenant_id}/resource-lookups/alias",
         "/api/v1/tenants/{tenant_id}/resources",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/history",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships",
+        "/api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical",
     ]
-    assert resource_routes[0].response_model is ResourcePageResponse
-    assert resource_routes[1].response_model is ResourceDetailsResponse
-    assert resource_routes[2].response_model is ResourceHistoryResponse
-    assert resource_routes[3].response_model is ResourceRelationshipsResponse
+    assert resource_routes[0].response_model is ResourceDetailsResponse
+    assert resource_routes[1].response_model is ResourceIdentifierLookupResponse
+    assert resource_routes[2].response_model is ResourceAliasLookupResponse
+    assert resource_routes[3].response_model is ResourcePageResponse
+    assert resource_routes[4].response_model is ResourceDetailsResponse
+    assert resource_routes[5].response_model is ResourceHistoryResponse
+    assert resource_routes[6].response_model is ResourceRelationshipsResponse
+    assert resource_routes[7].response_model is CanonicalResourceResolvedResponse

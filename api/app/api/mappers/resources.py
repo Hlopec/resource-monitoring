@@ -1,15 +1,19 @@
 """Explicit Resource application-result to API-schema mappers."""
 
 from app.api.schemas import (
+    CanonicalResourceResolvedResponse,
     ResourceAliasResponse,
+    ResourceAliasLookupResponse,
     ResourceClassificationResponse,
     ResourceDetailsResponse,
     ResourceHistoryResponse,
     ResourceIdentifierResponse,
+    ResourceIdentifierLookupResponse,
     ResourceLabelResponse,
     ResourceMergeResponse,
     ResourceOwnershipResponse,
     ResourcePageResponse,
+    ResourceReadResponse,
     ResourceRelationshipResponse,
     ResourceRelationshipsResponse,
     ResourceClassificationHistoryResponse,
@@ -21,12 +25,15 @@ from app.api.schemas import (
     ResourceSummaryResponse,
 )
 from app.application.results import (
+    CanonicalResourceResolvedResult,
+    ResourceAliasLookupResult,
     ResourceAliasResult,
     ResourceClassificationHistoryResult,
     ResourceClassificationResult,
     ResourceDetailsResult,
     ResourceHistoryResult,
     ResourceIdentifierHistoryResult,
+    ResourceIdentifierLookupResult,
     ResourceIdentifierResult,
     ResourceLabelHistoryResult,
     ResourceLabelResult,
@@ -34,6 +41,7 @@ from app.application.results import (
     ResourceOwnershipHistoryResult,
     ResourceOwnershipResult,
     ResourcePageResult,
+    ResourceReadResult,
     ResourceRelationshipResult,
     ResourceRelationshipsResult,
     ResourceStateHistoryResult,
@@ -66,6 +74,15 @@ def resource_page_response(result: ResourcePageResult) -> ResourcePageResponse:
     return ResourcePageResponse(
         items=[resource_summary_response(item) for item in result.items],
         next_cursor=result.next_cursor,
+    )
+
+
+def resource_read_response(result: ResourceReadResult) -> ResourceReadResponse:
+    return ResourceReadResponse(
+        id=result.id,
+        tenant_id=result.tenant_id,
+        canonical_name=result.canonical_name,
+        display_name=result.display_name,
     )
 
 
@@ -319,4 +336,43 @@ def resource_relationships_response(
             resource_relationship_response(relationship)
             for relationship in result.relationships
         ],
+    )
+
+
+def resource_identifier_lookup_response(
+    result: ResourceIdentifierLookupResult,
+) -> ResourceIdentifierLookupResponse:
+    return ResourceIdentifierLookupResponse(
+        resource=resource_read_response(result.resource),
+        identifier_id=result.identifier_id,
+        identifier_type_id=result.identifier_type_id,
+        namespace=result.namespace,
+        normalized_value=result.normalized_value,
+        original_value=result.original_value,
+        is_primary=result.is_primary,
+    )
+
+
+def resource_alias_lookup_response(
+    result: ResourceAliasLookupResult,
+) -> ResourceAliasLookupResponse:
+    return ResourceAliasLookupResponse(
+        resource=resource_read_response(result.resource),
+        alias_id=result.alias_id,
+        alias_type=result.alias_type,
+        normalized_value=result.normalized_value,
+        alias_value=result.alias_value,
+    )
+
+
+def canonical_resource_resolved_response(
+    result: CanonicalResourceResolvedResult,
+) -> CanonicalResourceResolvedResponse:
+    return CanonicalResourceResolvedResponse(
+        requested_resource_id=result.requested_resource_id,
+        canonical_resource_id=result.canonical_resource_id,
+        immediate_target_resource_id=result.immediate_target_resource_id,
+        merge_depth=result.merge_depth,
+        is_canonical=result.is_canonical,
+        canonical_resource=resource_read_response(result.canonical_resource),
     )
