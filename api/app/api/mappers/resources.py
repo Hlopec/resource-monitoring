@@ -4,23 +4,35 @@ from app.api.schemas import (
     ResourceAliasResponse,
     ResourceClassificationResponse,
     ResourceDetailsResponse,
+    ResourceHistoryResponse,
     ResourceIdentifierResponse,
     ResourceLabelResponse,
     ResourceMergeResponse,
     ResourceOwnershipResponse,
     ResourcePageResponse,
+    ResourceClassificationHistoryResponse,
+    ResourceIdentifierHistoryResponse,
+    ResourceLabelHistoryResponse,
+    ResourceOwnershipHistoryResponse,
+    ResourceStateHistoryResponse,
     ResourceStateResponse,
     ResourceSummaryResponse,
 )
 from app.application.results import (
     ResourceAliasResult,
+    ResourceClassificationHistoryResult,
     ResourceClassificationResult,
     ResourceDetailsResult,
+    ResourceHistoryResult,
+    ResourceIdentifierHistoryResult,
     ResourceIdentifierResult,
+    ResourceLabelHistoryResult,
     ResourceLabelResult,
     ResourceMergeResult,
+    ResourceOwnershipHistoryResult,
     ResourceOwnershipResult,
     ResourcePageResult,
+    ResourceStateHistoryResult,
     ResourceStateResult,
     ResourceSummaryResult,
 )
@@ -176,4 +188,102 @@ def resource_details_response(result: ResourceDetailsResult) -> ResourceDetailsR
             if result.outgoing_merge is not None
             else None
         ),
+    )
+
+
+def resource_state_history_response(
+    result: ResourceStateHistoryResult,
+) -> ResourceStateHistoryResponse:
+    return ResourceStateHistoryResponse(
+        id=result.id,
+        lifecycle_status_id=result.lifecycle_status_id,
+        criticality_id=result.criticality_id,
+        exposure_level_id=result.exposure_level_id,
+        source_priority=result.source_priority,
+        confidence_score=result.confidence_score,
+        valid_from=result.valid_from,
+        valid_to=result.valid_to,
+        source=result.source,
+    )
+
+
+def resource_ownership_history_response(
+    result: ResourceOwnershipHistoryResult,
+) -> ResourceOwnershipHistoryResponse:
+    return ResourceOwnershipHistoryResponse(
+        id=result.id,
+        organization_id=result.organization_id,
+        ownership_role_id=result.ownership_role_id,
+        is_primary=result.is_primary,
+        confidence_score=result.confidence_score,
+        valid_from=result.valid_from,
+        valid_to=result.valid_to,
+        source=result.source,
+    )
+
+
+def resource_label_history_response(
+    result: ResourceLabelHistoryResult,
+) -> ResourceLabelHistoryResponse:
+    return ResourceLabelHistoryResponse(
+        id=result.id,
+        label_id=result.label_id,
+        valid_from=result.valid_from,
+        valid_to=result.valid_to,
+        source=result.source,
+    )
+
+
+def resource_classification_history_response(
+    result: ResourceClassificationHistoryResult,
+) -> ResourceClassificationHistoryResponse:
+    return ResourceClassificationHistoryResponse(
+        id=result.id,
+        classification_type_id=result.classification_type_id,
+        classification_value_id=result.classification_value_id,
+        is_primary=result.is_primary,
+        confidence_score=result.confidence_score,
+        valid_from=result.valid_from,
+        valid_to=result.valid_to,
+        source=result.source,
+    )
+
+
+def resource_identifier_history_response(
+    result: ResourceIdentifierHistoryResult,
+) -> ResourceIdentifierHistoryResponse:
+    return ResourceIdentifierHistoryResponse(
+        id=result.id,
+        identifier_type_id=result.identifier_type_id,
+        namespace=result.namespace,
+        normalized_value=result.normalized_value,
+        original_value=result.original_value,
+        is_primary=result.is_primary,
+        confidence_score=result.confidence_score,
+        valid_from=result.valid_from,
+        valid_to=result.valid_to,
+    )
+
+
+def resource_history_response(result: ResourceHistoryResult) -> ResourceHistoryResponse:
+    return ResourceHistoryResponse(
+        id=result.id,
+        tenant_id=result.tenant_id,
+        resource_type_id=result.resource_type_id,
+        canonical_name=result.canonical_name,
+        display_name=result.display_name,
+        states=[resource_state_history_response(state) for state in result.states],
+        ownership=[
+            resource_ownership_history_response(ownership)
+            for ownership in result.ownership
+        ],
+        labels=[resource_label_history_response(label) for label in result.labels],
+        classifications=[
+            resource_classification_history_response(classification)
+            for classification in result.classifications
+        ],
+        identifiers=[
+            resource_identifier_history_response(identifier)
+            for identifier in result.identifiers
+        ],
     )

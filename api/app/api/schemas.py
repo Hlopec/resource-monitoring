@@ -160,3 +160,70 @@ class ResourceDetailsResponse(ApiSchema):
     labels: list[ResourceLabelResponse]
     aliases: list[ResourceAliasResponse]
     outgoing_merge: ResourceMergeResponse | None
+
+
+class ResourceStateHistoryResponse(ApiSchema):
+    id: UUID
+    lifecycle_status_id: UUID
+    criticality_id: UUID
+    exposure_level_id: UUID
+    source_priority: int
+    confidence_score: ApiDecimal
+    valid_from: AwareDatetime
+    valid_to: AwareDatetime | None
+    source: str | None
+
+
+class ResourceOwnershipHistoryResponse(ApiSchema):
+    id: UUID
+    organization_id: UUID
+    ownership_role_id: UUID
+    is_primary: bool
+    confidence_score: ApiDecimal
+    valid_from: AwareDatetime
+    valid_to: AwareDatetime | None
+    source: str | None
+
+
+class ResourceLabelHistoryResponse(ApiSchema):
+    id: UUID
+    label_id: UUID
+    valid_from: AwareDatetime
+    valid_to: AwareDatetime | None
+    source: str | None
+
+
+class ResourceClassificationHistoryResponse(ApiSchema):
+    id: UUID
+    classification_type_id: UUID
+    classification_value_id: UUID
+    is_primary: bool
+    confidence_score: ApiDecimal
+    valid_from: AwareDatetime
+    valid_to: AwareDatetime | None
+    source: str | None
+
+
+class ResourceIdentifierHistoryResponse(ApiSchema):
+    id: UUID
+    identifier_type_id: UUID
+    namespace: str | None
+    normalized_value: str
+    original_value: str
+    is_primary: bool
+    confidence_score: ApiDecimal
+    valid_from: AwareDatetime
+    valid_to: AwareDatetime | None
+
+
+class ResourceHistoryResponse(ApiSchema):
+    id: UUID
+    tenant_id: UUID
+    resource_type_id: UUID
+    canonical_name: str
+    display_name: str
+    states: list[ResourceStateHistoryResponse]
+    ownership: list[ResourceOwnershipHistoryResponse]
+    labels: list[ResourceLabelHistoryResponse]
+    classifications: list[ResourceClassificationHistoryResponse]
+    identifiers: list[ResourceIdentifierHistoryResponse]

@@ -170,6 +170,12 @@ Explicit mapping functions live in `app.api.mappers.resources`:
 - `resource_alias_response(result: ResourceAliasResult) -> ResourceAliasResponse`
 - `resource_merge_response(result: ResourceMergeResult) -> ResourceMergeResponse`
 - `resource_details_response(result: ResourceDetailsResult) -> ResourceDetailsResponse`
+- `resource_state_history_response(result: ResourceStateHistoryResult) -> ResourceStateHistoryResponse`
+- `resource_ownership_history_response(result: ResourceOwnershipHistoryResult) -> ResourceOwnershipHistoryResponse`
+- `resource_label_history_response(result: ResourceLabelHistoryResult) -> ResourceLabelHistoryResponse`
+- `resource_classification_history_response(result: ResourceClassificationHistoryResult) -> ResourceClassificationHistoryResponse`
+- `resource_identifier_history_response(result: ResourceIdentifierHistoryResult) -> ResourceIdentifierHistoryResponse`
+- `resource_history_response(result: ResourceHistoryResult) -> ResourceHistoryResponse`
 
 These functions construct response schemas field by field. There is no generic serializer, serializer registry, reflection mapper, DTO framework, or `model_validate(..., from_attributes=True)` shortcut over arbitrary objects.
 
@@ -479,7 +485,120 @@ The current production Resource route inventory is exactly:
 ```text
 GET /api/v1/tenants/{tenant_id}/resources
 GET /api/v1/tenants/{tenant_id}/resources/{resource_id}
+GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/history
 ```
+
+## Resource History API
+
+Stage `04.2.3` adds the Resource History endpoint:
+
+```http
+GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/history
+```
+
+The route is a thin transport adapter:
+
+```text
+HTTP path params
+-> FastAPI UUID parsing
+-> GetResourceHistoryQuery
+-> GetResourceHistoryHandler
+-> ResourceHistoryResult
+-> resource_history_response(...)
+-> ResourceHistoryResponse
+```
+
+The route constructs the application query explicitly:
+
+```python
+GetResourceHistoryQuery(
+    tenant_id=tenant_id,
+    resource_id=resource_id,
+)
+```
+
+Both path values are parsed by FastAPI as native `UUID` values and passed directly into the query. The route does not accept history query filters, cursors, offsets, date ranges, sort controls, or tenant query overrides because `GetResourceHistoryQuery` currently has only `tenant_id` and `resource_id`.
+
+The route depends on `get_get_resource_history_handler`, which returns `GetResourceHistoryHandler` from the API composition boundary. Route code does not instantiate handlers directly, resolve `UnitOfWorkFactory`, import `SQLAlchemyUnitOfWork`, import repositories, call `ResourceQueryService`, or catch `ApplicationError`.
+
+The response schema is `ResourceHistoryResponse`, matching `ResourceHistoryResult` exactly:
+
+| Field | Type |
+| --- | --- |
+| `id` | `UUID` |
+| `tenant_id` | `UUID` |
+| `resource_type_id` | `UUID` |
+| `canonical_name` | `str` |
+| `display_name` | `str` |
+| `states` | `list[ResourceStateHistoryResponse]` |
+| `ownership` | `list[ResourceOwnershipHistoryResponse]` |
+| `labels` | `list[ResourceLabelHistoryResponse]` |
+| `classifications` | `list[ResourceClassificationHistoryResponse]` |
+| `identifiers` | `list[ResourceIdentifierHistoryResponse]` |
+
+Nested history response shapes are exact API-owned projections of current application history results:
+
+| Schema | Fields |
+| --- | --- |
+| `ResourceStateHistoryResponse` | `id`, `lifecycle_status_id`, `criticality_id`, `exposure_level_id`, `source_priority`, `confidence_score`, `valid_from`, `valid_to`, `source` |
+| `ResourceOwnershipHistoryResponse` | `id`, `organization_id`, `ownership_role_id`, `is_primary`, `confidence_score`, `valid_from`, `valid_to`, `source` |
+| `ResourceLabelHistoryResponse` | `id`, `label_id`, `valid_from`, `valid_to`, `source` |
+| `ResourceClassificationHistoryResponse` | `id`, `classification_type_id`, `classification_value_id`, `is_primary`, `confidence_score`, `valid_from`, `valid_to`, `source` |
+| `ResourceIdentifierHistoryResponse` | `id`, `identifier_type_id`, `namespace`, `normalized_value`, `original_value`, `is_primary`, `confidence_score`, `valid_from`, `valid_to` |
+
+The API boundary preserves the exact tuple order returned by the application layer for every history collection. It does not sort by timestamp, id, category, or current/historical status, and it does not regroup records. Tuple collections become ordered JSON arrays only.
+
+An existing resource with an empty history result returns `200 OK` with the exact empty history representation:
+
+```json
+{
+  "id": "0198a4a2-0000-7000-8000-000000000001",
+  "tenant_id": "0198a4a2-0000-7000-8000-000000000002",
+  "resource_type_id": "0198a4a2-0000-7000-8000-000000000003",
+  "canonical_name": "empty.example.com",
+  "display_name": "Empty",
+  "states": [],
+  "ownership": [],
+  "labels": [],
+  "classifications": [],
+  "identifiers": []
+}
+```
+
+Example non-empty response shape:
+
+```json
+{
+  "id": "0198a4a2-0000-7000-8000-000000000001",
+  "tenant_id": "0198a4a2-0000-7000-8000-000000000002",
+  "resource_type_id": "0198a4a2-0000-7000-8000-000000000003",
+  "canonical_name": "app01.example.com",
+  "display_name": "Application 01",
+  "states": [
+    {
+      "id": "0198a4a2-0000-7000-8000-000000000902",
+      "lifecycle_status_id": "0198a4a2-0000-7000-8000-000000000102",
+      "criticality_id": "0198a4a2-0000-7000-8000-000000000103",
+      "exposure_level_id": "0198a4a2-0000-7000-8000-000000000104",
+      "source_priority": 2,
+      "confidence_score": "0.9500",
+      "valid_from": "2026-08-19T12:20:00Z",
+      "valid_to": null,
+      "source": "cmdb"
+    }
+  ],
+  "ownership": [],
+  "labels": [],
+  "classifications": [],
+  "identifiers": []
+}
+```
+
+`UUID`, `AwareDatetime`, `ApiDecimal`, and `None` reuse the common serialization policy. Decimal values are emitted as JSON strings to preserve precision, aware datetimes are emitted as ISO-8601 strings, and nullable fields such as `valid_to`, `source`, and `namespace` remain JSON `null`.
+
+Malformed `tenant_id` or `resource_id` values are FastAPI transport validation errors. Missing resources and wrong-tenant resources are handled by application errors and centralized API error translation as the same non-disclosing `404 not_found` envelope. Persistence failures propagate to the centralized `503 service_unavailable` envelope without SQL, SQLSTATE, constraint names, or stack traces.
+
+The history endpoint is separate from details. It does not call `GetResourceDetailsHandler`, construct `GetResourceDetailsQuery`, use `get_get_resource_details_handler`, aggregate a details payload, compute diffs, or add relationship history. It also does not automatically resolve canonical resources: it does not call `ResolveCanonicalResourceHandler`, construct `ResolveCanonicalResourceQuery`, redirect, perform a second lookup against a canonical target, or replace the requested `resource_id`.
 
 ## OpenAPI Policy
 
@@ -511,11 +630,12 @@ Architecture tests enforce:
 - handler providers produce fresh instances and no global handler singletons are introduced;
 - `main.py` stays bootstrap-oriented;
 - the FastAPI app imports and keeps `/` and `/health` working;
-- the `/api/v1` production Resource route inventory contains only `GET /api/v1/tenants/{tenant_id}/resources` and `GET /api/v1/tenants/{tenant_id}/resources/{resource_id}`;
+- the `/api/v1` production Resource route inventory contains only `GET /api/v1/tenants/{tenant_id}/resources`, `GET /api/v1/tenants/{tenant_id}/resources/{resource_id}`, and `GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/history`;
 - Resource routes do not import or call canonical resolution handlers, queries, or providers;
+- the Resource history route does not call Resource details handlers, queries, or providers;
 - Resource routes use API-owned response models and do not call transaction methods;
 - command bus, mediator, handler registry, and service locator patterns are not introduced.
 
 ## Deferred Work
 
-Stage `04.1` is complete and Stage `04.2` has list and details Resource read endpoints. The next planned step is `04.2.3 — Implement Resource History API`. Deferred work includes Resource history/relationship endpoints, identity lookup endpoints, canonical resolution endpoints, write endpoints, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
+Stage `04.1` is complete and Stage `04.2` has list, details, and history Resource read endpoints. The next planned step is `04.2.4 — Implement Resource Relationships API`. Deferred work includes Resource relationship endpoints, identity lookup endpoints, canonical resolution endpoints, write endpoints, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
