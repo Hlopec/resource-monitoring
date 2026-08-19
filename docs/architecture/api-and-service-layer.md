@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Stage `04.1.1` defines the first API and service-layer architecture baseline. Stage `04.1.2` adds explicit FastAPI dependency wiring for the existing Block 03 Resource handlers without adding production Resource endpoints. Stage `04.2` starts production Resource read routes with list and details endpoints. The baseline establishes where FastAPI code lives, how HTTP transport code will call application handlers, how application errors will be translated to HTTP responses, and which dependencies are forbidden across boundaries.
+Stage `04.1.1` defines the first API and service-layer architecture baseline. Stage `04.1.2` adds explicit FastAPI dependency wiring for the existing Block 03 Resource handlers without adding production Resource endpoints. Stage `04.2` adds production Resource read, relationship, identity lookup, and explicit canonical-resolution endpoints. The baseline establishes where FastAPI code lives, how HTTP transport code will call application handlers, how application errors will be translated to HTTP responses, and which dependencies are forbidden across boundaries.
 
 The accepted dependency direction is:
 
@@ -29,11 +29,13 @@ api/app/api/
   router.py
   routes/
     __init__.py
+    resource_lookups.py
+    resources.py
     system.py
   schemas.py
 ```
 
-`router.py` composes FastAPI routers. `routes/system.py` owns the existing `/` and `/health` endpoints. `schemas.py` owns Pydantic transport contracts, reusable scalar serialization policy, the Resource summary response, the Resource cursor page envelope, and the public API error envelope. `mappers/resources.py` owns explicit Resource application-result to API-schema mapping. `errors.py` owns centralized `ApplicationError` to HTTP response mapping. `composition.py` is the explicit composition root where FastAPI dependencies wire application handlers to the application-facing `UnitOfWorkFactory`.
+`router.py` composes FastAPI routers. `routes/system.py` owns the existing `/` and `/health` endpoints. `routes/resources.py` owns Resource collection, detail, history, relationship, and explicit canonical-resolution routes. `routes/resource_lookups.py` owns static Resource identity lookup routes so they cannot be shadowed by dynamic `{resource_id}` paths. `schemas.py` owns Pydantic transport contracts, reusable scalar serialization policy, Resource read response shapes, lookup responses, canonical-resolution responses, and the public API error envelope. `mappers/resources.py` owns explicit Resource application-result to API-schema mapping. `errors.py` owns centralized `ApplicationError` to HTTP response mapping. `composition.py` is the explicit composition root where FastAPI dependencies wire application handlers to the application-facing `UnitOfWorkFactory`.
 
 `api/app/main.py` remains bootstrap-oriented: it creates the FastAPI application and includes routers. It should not hold production endpoint logic, SQLAlchemy session access, repositories, or application use-case decisions.
 
@@ -162,6 +164,7 @@ Explicit mapping functions live in `app.api.mappers.resources`:
 
 - `resource_summary_response(result: ResourceSummaryResult) -> ResourceSummaryResponse`
 - `resource_page_response(result: ResourcePageResult) -> ResourcePageResponse`
+- `resource_read_response(result: ResourceReadResult) -> ResourceReadResponse`
 - `resource_state_response(result: ResourceStateResult) -> ResourceStateResponse`
 - `resource_identifier_response(result: ResourceIdentifierResult) -> ResourceIdentifierResponse`
 - `resource_ownership_response(result: ResourceOwnershipResult) -> ResourceOwnershipResponse`
@@ -178,6 +181,9 @@ Explicit mapping functions live in `app.api.mappers.resources`:
 - `resource_history_response(result: ResourceHistoryResult) -> ResourceHistoryResponse`
 - `resource_relationship_response(result: ResourceRelationshipResult) -> ResourceRelationshipResponse`
 - `resource_relationships_response(result: ResourceRelationshipsResult) -> ResourceRelationshipsResponse`
+- `resource_identifier_lookup_response(result: ResourceIdentifierLookupResult) -> ResourceIdentifierLookupResponse`
+- `resource_alias_lookup_response(result: ResourceAliasLookupResult) -> ResourceAliasLookupResponse`
+- `canonical_resource_resolved_response(result: CanonicalResourceResolvedResult) -> CanonicalResourceResolvedResponse`
 
 These functions construct response schemas field by field. There is no generic serializer, serializer registry, reflection mapper, DTO framework, or `model_validate(..., from_attributes=True)` shortcut over arbitrary objects.
 
@@ -489,6 +495,10 @@ GET /api/v1/tenants/{tenant_id}/resources
 GET /api/v1/tenants/{tenant_id}/resources/{resource_id}
 GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/history
 GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships
+GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical
+GET /api/v1/tenants/{tenant_id}/resource-lookups/canonical-name
+GET /api/v1/tenants/{tenant_id}/resource-lookups/identifier
+GET /api/v1/tenants/{tenant_id}/resource-lookups/alias
 ```
 
 ## Resource History API
@@ -702,6 +712,221 @@ The relationships endpoint is separate from details and history. It does not cal
 
 This endpoint is read-only. It does not call `AssignResourceRelationshipHandler`, construct `AssignResourceRelationshipCommand`, or expose relationship create, update, patch, or delete behavior.
 
+## Resource Identity And Canonical Resolution API
+
+Stage `04.2.5` adds explicit Resource identity lookup routes and an explicit canonical-resolution route. These endpoints are read-only transport adapters over existing application query handlers. They do not introduce writes, mutations, generic identity resolver behavior, fuzzy search, partial search, pagination, redirects, caching, persistence access, new database models, migrations, or async SQLAlchemy.
+
+The production Resource API route inventory is exactly:
+
+```text
+GET /api/v1/tenants/{tenant_id}/resources
+GET /api/v1/tenants/{tenant_id}/resources/{resource_id}
+GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/history
+GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships
+GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical
+GET /api/v1/tenants/{tenant_id}/resource-lookups/canonical-name
+GET /api/v1/tenants/{tenant_id}/resource-lookups/identifier
+GET /api/v1/tenants/{tenant_id}/resource-lookups/alias
+```
+
+The canonical-name lookup endpoint is:
+
+```http
+GET /api/v1/tenants/{tenant_id}/resource-lookups/canonical-name?canonical_name=...
+```
+
+It maps request values exactly as:
+
+```text
+tenant_id + canonical_name
+-> GetResourceByCanonicalNameQuery
+-> get_get_resource_by_canonical_name_handler
+-> GetResourceByCanonicalNameHandler
+-> ResourceDetailsResult
+-> resource_details_response(...)
+-> ResourceDetailsResponse
+```
+
+The route passes `canonical_name` unchanged to the application query. It reuses `ResourceDetailsResponse` intentionally because the application result is a full resource details projection. It does not call `ResolveCanonicalResourceHandler`, construct `ResolveCanonicalResourceQuery`, redirect, or replace the matching resource with a canonical target.
+
+The identifier lookup endpoint is:
+
+```http
+GET /api/v1/tenants/{tenant_id}/resource-lookups/identifier?identifier_type_id=...&normalized_value=...&namespace=...
+```
+
+It maps request values exactly as:
+
+```text
+tenant_id + identifier_type_id + namespace + normalized_value
+-> FindResourceByIdentifierQuery
+-> get_find_resource_by_identifier_handler
+-> FindResourceByIdentifierHandler
+-> ResourceIdentifierLookupResult
+-> resource_identifier_lookup_response(...)
+-> ResourceIdentifierLookupResponse
+```
+
+The route preserves `namespace=None` when the query parameter is omitted and preserves `namespace=""` when the parameter is present with an empty value. It passes `normalized_value` unchanged and does not trim, lower-case, hash, infer namespace, perform secondary lookup, or normalize input in the transport layer.
+
+`ResourceIdentifierLookupResponse` has exactly:
+
+| Field | Type |
+| --- | --- |
+| `resource` | `ResourceReadResponse` |
+| `identifier_id` | `UUID` |
+| `identifier_type_id` | `UUID` |
+| `namespace` | `str | None` |
+| `normalized_value` | `str` |
+| `original_value` | `str` |
+| `is_primary` | `bool` |
+
+The alias lookup endpoint is:
+
+```http
+GET /api/v1/tenants/{tenant_id}/resource-lookups/alias?alias_type=...&normalized_value=...
+```
+
+It maps request values exactly as:
+
+```text
+tenant_id + alias_type + normalized_value
+-> FindResourceByAliasQuery
+-> get_find_resource_by_alias_handler
+-> FindResourceByAliasHandler
+-> ResourceAliasLookupResult
+-> resource_alias_lookup_response(...)
+-> ResourceAliasLookupResponse
+```
+
+The route passes `alias_type` and `normalized_value` unchanged. It does not normalize, trim, resolve aliases recursively, perform fuzzy search, or resolve the matched resource to a canonical target.
+
+`ResourceAliasLookupResponse` has exactly:
+
+| Field | Type |
+| --- | --- |
+| `resource` | `ResourceReadResponse` |
+| `alias_id` | `UUID` |
+| `alias_type` | `str` |
+| `normalized_value` | `str` |
+| `alias_value` | `str` |
+
+The explicit canonical-resolution endpoint is:
+
+```http
+GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical
+```
+
+It maps request values exactly as:
+
+```text
+tenant_id + resource_id
+-> ResolveCanonicalResourceQuery
+-> get_resolve_canonical_resource_handler
+-> ResolveCanonicalResourceHandler
+-> CanonicalResourceResolvedResult
+-> canonical_resource_resolved_response(...)
+-> CanonicalResourceResolvedResponse
+```
+
+This endpoint returns `200 OK` JSON for both already-canonical and merged resources. It does not return an HTTP redirect, does not set a `Location` header, and does not mutate merge state. Application-owned canonical traversal, merge-depth behavior, cycle detection, and conflict semantics remain in the application handler. Conflicts propagate as `ConflictError` and are translated centrally to the stable `409 conflict` envelope.
+
+`CanonicalResourceResolvedResponse` has exactly:
+
+| Field | Type |
+| --- | --- |
+| `requested_resource_id` | `UUID` |
+| `canonical_resource_id` | `UUID` |
+| `immediate_target_resource_id` | `UUID | None` |
+| `merge_depth` | `int` |
+| `is_canonical` | `bool` |
+| `canonical_resource` | `ResourceReadResponse` |
+
+`ResourceReadResponse` is the compact embedded Resource shape used by lookup and canonical-resolution responses:
+
+| Field | Type |
+| --- | --- |
+| `id` | `UUID` |
+| `tenant_id` | `UUID` |
+| `canonical_name` | `str` |
+| `display_name` | `str | None` |
+
+Example identifier lookup response:
+
+```json
+{
+  "resource": {
+    "id": "0198a4a2-0000-7000-8000-000000000001",
+    "tenant_id": "0198a4a2-0000-7000-8000-000000000002",
+    "canonical_name": "app01.example.com",
+    "display_name": "Application 01"
+  },
+  "identifier_id": "0198a4a2-0000-7000-8000-000000000901",
+  "identifier_type_id": "0198a4a2-0000-7000-8000-000000000101",
+  "namespace": null,
+  "normalized_value": "asset-123",
+  "original_value": "ASSET-123",
+  "is_primary": true
+}
+```
+
+Example alias lookup response:
+
+```json
+{
+  "resource": {
+    "id": "0198a4a2-0000-7000-8000-000000000001",
+    "tenant_id": "0198a4a2-0000-7000-8000-000000000002",
+    "canonical_name": "app01.example.com",
+    "display_name": null
+  },
+  "alias_id": "0198a4a2-0000-7000-8000-000000000902",
+  "alias_type": "dns",
+  "normalized_value": "app01",
+  "alias_value": "APP01"
+}
+```
+
+Example canonical resolution for an already-canonical resource:
+
+```json
+{
+  "requested_resource_id": "0198a4a2-0000-7000-8000-000000000001",
+  "canonical_resource_id": "0198a4a2-0000-7000-8000-000000000001",
+  "immediate_target_resource_id": null,
+  "merge_depth": 0,
+  "is_canonical": true,
+  "canonical_resource": {
+    "id": "0198a4a2-0000-7000-8000-000000000001",
+    "tenant_id": "0198a4a2-0000-7000-8000-000000000002",
+    "canonical_name": "app01.example.com",
+    "display_name": "Application 01"
+  }
+}
+```
+
+Example canonical resolution for a merged resource:
+
+```json
+{
+  "requested_resource_id": "0198a4a2-0000-7000-8000-000000000001",
+  "canonical_resource_id": "0198a4a2-0000-7000-8000-000000000003",
+  "immediate_target_resource_id": "0198a4a2-0000-7000-8000-000000000002",
+  "merge_depth": 2,
+  "is_canonical": false,
+  "canonical_resource": {
+    "id": "0198a4a2-0000-7000-8000-000000000003",
+    "tenant_id": "0198a4a2-0000-7000-8000-000000000002",
+    "canonical_name": "canonical.example.com",
+    "display_name": "Canonical Resource"
+  }
+}
+```
+
+Malformed UUID path or query values remain FastAPI transport-validation errors. Missing resources, wrong-tenant resources, missing identifiers, and missing aliases propagate from application handlers through centralized `ApplicationError` mapping. The public API keeps `404 not_found`, `409 conflict`, and `503 service_unavailable` sanitized and does not expose SQL, constraint names, persistence adapter details, merge internals beyond the response contract, or cross-tenant existence details.
+
+Existing list, details, history, relationships, canonical-name lookup, identifier lookup, and alias lookup routes are canonical-resolution-free. Only `GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical` calls the canonical-resolution handler.
+
 ## OpenAPI Policy
 
 OpenAPI tags, operation ids, status codes, examples, and schema metadata belong to API modules only. Application commands, queries, handlers, and results must remain unaware of OpenAPI. Stage `04.1.3` only verifies that common schemas can be included in generated OpenAPI components; operation metadata hardening remains deferred.
@@ -732,13 +957,16 @@ Architecture tests enforce:
 - handler providers produce fresh instances and no global handler singletons are introduced;
 - `main.py` stays bootstrap-oriented;
 - the FastAPI app imports and keeps `/` and `/health` working;
-- the `/api/v1` production Resource route inventory contains only `GET /api/v1/tenants/{tenant_id}/resources`, `GET /api/v1/tenants/{tenant_id}/resources/{resource_id}`, `GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/history`, and `GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships`;
-- Resource routes do not import or call canonical resolution handlers, queries, or providers;
+- the `/api/v1` production Resource route inventory contains only list, details, history, relationships, explicit canonical resolution, and three static Resource lookup `GET` routes;
+- Resource details, history, relationships, and lookup routes do not import or call canonical resolution handlers, queries, or providers;
 - the Resource history route does not call Resource details handlers, queries, or providers;
 - the Resource relationships route does not call Resource details handlers, Resource history handlers, canonical resolution handlers, relationship write handlers, or graph traversal helpers;
+- the Resource canonical route calls only `ResolveCanonicalResourceHandler`, constructs only `ResolveCanonicalResourceQuery`, returns JSON, and does not redirect;
+- Resource lookup routes are static `/resource-lookups/...` routes and are included before dynamic Resource id routes;
+- Resource lookup routes preserve provided query strings and do not normalize, trim, hash, enrich, or canonical-resolve input;
 - Resource routes use API-owned response models and do not call transaction methods;
 - command bus, mediator, handler registry, and service locator patterns are not introduced.
 
 ## Deferred Work
 
-Stage `04.1` is complete and Stage `04.2` has list, details, history, and relationships Resource read endpoints. The next planned step is `04.2.5 — Implement Resource Identity and Canonical Resolution API`. Deferred work includes identity lookup endpoints, canonical resolution endpoints, write endpoints, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
+Stage `04.1` is complete and Stage `04.2` has list, details, history, relationships, identity lookup, and explicit canonical-resolution Resource read endpoints. The next planned step is `04.3.1 — Implement Resource Creation API`. Deferred work includes write endpoints, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.

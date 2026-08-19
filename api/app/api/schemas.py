@@ -75,6 +75,13 @@ class ResourcePageResponse(ApiSchema):
     next_cursor: str | None
 
 
+class ResourceReadResponse(ApiSchema):
+    id: UUID
+    tenant_id: UUID
+    canonical_name: str
+    display_name: str | None
+
+
 class ResourceStateResponse(ApiSchema):
     id: UUID
     lifecycle_status_id: UUID
@@ -245,3 +252,30 @@ class ResourceRelationshipsResponse(ApiSchema):
     resource_id: UUID
     tenant_id: UUID
     relationships: list[ResourceRelationshipResponse]
+
+
+class ResourceIdentifierLookupResponse(ApiSchema):
+    resource: ResourceReadResponse
+    identifier_id: UUID
+    identifier_type_id: UUID
+    namespace: str | None
+    normalized_value: str
+    original_value: str
+    is_primary: bool
+
+
+class ResourceAliasLookupResponse(ApiSchema):
+    resource: ResourceReadResponse
+    alias_id: UUID
+    alias_type: str
+    normalized_value: str
+    alias_value: str
+
+
+class CanonicalResourceResolvedResponse(ApiSchema):
+    requested_resource_id: UUID
+    canonical_resource_id: UUID
+    immediate_target_resource_id: UUID | None
+    merge_depth: int
+    is_canonical: bool
+    canonical_resource: ResourceReadResponse

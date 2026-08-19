@@ -9,14 +9,17 @@ from app.api.composition import (
     get_get_resource_history_handler,
     get_get_resource_relationships_handler,
     get_list_resources_handler,
+    get_resolve_canonical_resource_handler,
 )
 from app.api.mappers import (
+    canonical_resource_resolved_response,
     resource_details_response,
     resource_history_response,
     resource_page_response,
     resource_relationships_response,
 )
 from app.api.schemas import (
+    CanonicalResourceResolvedResponse,
     ResourceDetailsResponse,
     ResourceHistoryResponse,
     ResourcePageResponse,
@@ -27,6 +30,7 @@ from app.application.handlers import (
     GetResourceHistoryHandler,
     GetResourceRelationshipsHandler,
     ListResourcesHandler,
+    ResolveCanonicalResourceHandler,
 )
 from app.application.queries import (
     DEFAULT_RESOURCE_PAGE_SIZE,
@@ -34,6 +38,7 @@ from app.application.queries import (
     GetResourceHistoryQuery,
     GetResourceRelationshipsQuery,
     ListResourcesQuery,
+    ResolveCanonicalResourceQuery,
 )
 
 router = APIRouter(tags=["resources"])
@@ -121,3 +126,22 @@ def get_resource_relationships(
         resource_id=resource_id,
     )
     return resource_relationships_response(handler.handle(query))
+
+
+@router.get(
+    "/tenants/{tenant_id}/resources/{resource_id}/canonical",
+    response_model=CanonicalResourceResolvedResponse,
+    summary="Resolve tenant resource canonical target",
+)
+def resolve_resource_canonical(
+    tenant_id: UUID,
+    resource_id: UUID,
+    handler: ResolveCanonicalResourceHandler = Depends(
+        get_resolve_canonical_resource_handler
+    ),
+) -> CanonicalResourceResolvedResponse:
+    query = ResolveCanonicalResourceQuery(
+        tenant_id=tenant_id,
+        resource_id=resource_id,
+    )
+    return canonical_resource_resolved_response(handler.handle(query))
