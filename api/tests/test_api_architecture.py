@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 import app.api.composition as composition
+import app.api.routes.resources as resource_routes
 from app.api.composition import get_unit_of_work_factory
 from app.api.errors import (
     api_error_response_for,
@@ -23,6 +24,7 @@ from app.api.schemas import (
     ApiErrorResponse,
     ApiSchema,
     ResourceDetailsResponse,
+    ResourceHistoryResponse,
     ResourcePageResponse,
 )
 from app.application.errors import ConcurrentModificationError, ConflictError
@@ -134,6 +136,15 @@ FORBIDDEN_RESOURCE_ROUTE_NAMES = {
     "ResolveCanonicalResourceQuery",
     "get_resolve_canonical_resource_handler",
 }
+FORBIDDEN_HISTORY_ROUTE_NAMES = {
+    "GetResourceDetailsHandler",
+    "GetResourceDetailsQuery",
+    "get_get_resource_details_handler",
+    "ResolveCanonicalResourceHandler",
+    "ResolveCanonicalResourceQuery",
+    "get_resolve_canonical_resource_handler",
+    "ResourceQueryService",
+}
 RESOURCE_HANDLER_PROVIDERS = {
     "get_list_resources_handler": ListResourcesHandler,
     "get_get_resource_by_id_handler": GetResourceByIdHandler,
@@ -226,6 +237,13 @@ def _except_handler_names_for(path: Path) -> set[str]:
     return names
 
 
+def _function_def_for(path: Path, function_name: str) -> ast.FunctionDef:
+    for node in ast.walk(_tree_for(path)):
+        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+            return node
+    raise AssertionError(f"{function_name} not found in {path}")
+
+
 def test_application_layer_does_not_import_api_or_transport_frameworks() -> None:
     for path in _python_files(APPLICATION_ROOT):
         imports = _imports_for(path)
@@ -264,6 +282,40 @@ def test_resource_routes_do_not_bypass_handlers_or_resolve_canonical_resources()
 
     assert FORBIDDEN_RESOURCE_ROUTE_NAMES.isdisjoint(imported_names)
     assert not _source_contains(resource_route_path, FORBIDDEN_RESOURCE_ROUTE_NAMES)
+
+
+def test_resource_history_route_is_isolated_from_details_and_canonical_use_cases() -> None:
+    resource_route_path = API_ROUTES_ROOT / "resources.py"
+    history_function = _function_def_for(resource_route_path, "get_resource_history")
+    source = inspect.getsource(resource_routes.get_resource_history)
+    call_names = _call_names_for(resource_routes.get_resource_history)
+    signature = inspect.signature(resource_routes.get_resource_history)
+    handler_parameter = signature.parameters["handler"]
+
+    decorator = history_function.decorator_list[0]
+    assert isinstance(decorator, ast.Call)
+    assert isinstance(decorator.func, ast.Attribute)
+    assert decorator.func.attr == "get"
+    assert isinstance(decorator.args[0], ast.Constant)
+    assert decorator.args[0].value == (
+        "/tenants/{tenant_id}/resources/{resource_id}/history"
+    )
+    assert any(
+        keyword.arg == "response_model"
+        and isinstance(keyword.value, ast.Name)
+        and keyword.value.id == "ResourceHistoryResponse"
+        for keyword in decorator.keywords
+    )
+    assert list(signature.parameters) == ["tenant_id", "resource_id", "handler"]
+    assert isinstance(handler_parameter.default, Depends)
+    assert (
+        handler_parameter.default.dependency
+        is composition.get_get_resource_history_handler
+    )
+    assert "GetResourceHistoryQuery" in call_names
+    assert "resource_history_response" in call_names
+    assert "handle" in call_names
+    assert not any(name in source for name in FORBIDDEN_HISTORY_ROUTE_NAMES)
 
 
 def test_api_schemas_are_pydantic_transport_contracts_not_orm_models() -> None:
@@ -471,7 +523,7 @@ def test_fastapi_app_imports_and_existing_system_routes_work() -> None:
     assert health_response.json() == {"status": "healthy"}
 
 
-def test_api_v1_router_contains_only_resource_list_and_details_production_endpoints() -> None:
+def test_api_v1_router_contains_only_resource_list_details_and_history_endpoints() -> None:
     route_paths = {route.path for route in app.routes}
     api_v1_paths = {route.path for route in api_v1_router.routes}
     resource_routes = [
@@ -484,11 +536,14 @@ def test_api_v1_router_contains_only_resource_list_and_details_production_endpoi
     assert api_v1_paths == {
         "/api/v1/tenants/{tenant_id}/resources",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}",
+        "/api/v1/tenants/{tenant_id}/resources/{resource_id}/history",
     }
     assert "/api/v1/resources" not in route_paths
     assert [route.path for route in resource_routes] == [
         "/api/v1/tenants/{tenant_id}/resources",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}",
+        "/api/v1/tenants/{tenant_id}/resources/{resource_id}/history",
     ]
     assert resource_routes[0].response_model is ResourcePageResponse
     assert resource_routes[1].response_model is ResourceDetailsResponse
+    assert resource_routes[2].response_model is ResourceHistoryResponse

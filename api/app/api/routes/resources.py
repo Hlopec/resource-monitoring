@@ -6,14 +6,28 @@ from fastapi import APIRouter, Depends
 
 from app.api.composition import (
     get_get_resource_details_handler,
+    get_get_resource_history_handler,
     get_list_resources_handler,
 )
-from app.api.mappers import resource_details_response, resource_page_response
-from app.api.schemas import ResourceDetailsResponse, ResourcePageResponse
-from app.application.handlers import GetResourceDetailsHandler, ListResourcesHandler
+from app.api.mappers import (
+    resource_details_response,
+    resource_history_response,
+    resource_page_response,
+)
+from app.api.schemas import (
+    ResourceDetailsResponse,
+    ResourceHistoryResponse,
+    ResourcePageResponse,
+)
+from app.application.handlers import (
+    GetResourceDetailsHandler,
+    GetResourceHistoryHandler,
+    ListResourcesHandler,
+)
 from app.application.queries import (
     DEFAULT_RESOURCE_PAGE_SIZE,
     GetResourceDetailsQuery,
+    GetResourceHistoryQuery,
     ListResourcesQuery,
 )
 
@@ -66,3 +80,20 @@ def get_resource_details(
         resource_id=resource_id,
     )
     return resource_details_response(handler.handle(query))
+
+
+@router.get(
+    "/tenants/{tenant_id}/resources/{resource_id}/history",
+    response_model=ResourceHistoryResponse,
+    summary="Get tenant resource history",
+)
+def get_resource_history(
+    tenant_id: UUID,
+    resource_id: UUID,
+    handler: GetResourceHistoryHandler = Depends(get_get_resource_history_handler),
+) -> ResourceHistoryResponse:
+    query = GetResourceHistoryQuery(
+        tenant_id=tenant_id,
+        resource_id=resource_id,
+    )
+    return resource_history_response(handler.handle(query))
