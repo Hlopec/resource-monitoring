@@ -10,6 +10,8 @@ from app.api.schemas import (
     ResourceMergeResponse,
     ResourceOwnershipResponse,
     ResourcePageResponse,
+    ResourceRelationshipResponse,
+    ResourceRelationshipsResponse,
     ResourceClassificationHistoryResponse,
     ResourceIdentifierHistoryResponse,
     ResourceLabelHistoryResponse,
@@ -32,6 +34,8 @@ from app.application.results import (
     ResourceOwnershipHistoryResult,
     ResourceOwnershipResult,
     ResourcePageResult,
+    ResourceRelationshipResult,
+    ResourceRelationshipsResult,
     ResourceStateHistoryResult,
     ResourceStateResult,
     ResourceSummaryResult,
@@ -285,5 +289,34 @@ def resource_history_response(result: ResourceHistoryResult) -> ResourceHistoryR
         identifiers=[
             resource_identifier_history_response(identifier)
             for identifier in result.identifiers
+        ],
+    )
+
+
+def resource_relationship_response(
+    result: ResourceRelationshipResult,
+) -> ResourceRelationshipResponse:
+    return ResourceRelationshipResponse(
+        id=result.id,
+        relationship_type_id=result.relationship_type_id,
+        source_resource_id=result.source_resource_id,
+        target_resource_id=result.target_resource_id,
+        direction=result.direction,
+        confidence_score=result.confidence_score,
+        valid_from=result.valid_from,
+        source=result.source,
+        created_at=result.created_at,
+    )
+
+
+def resource_relationships_response(
+    result: ResourceRelationshipsResult,
+) -> ResourceRelationshipsResponse:
+    return ResourceRelationshipsResponse(
+        resource_id=result.resource_id,
+        tenant_id=result.tenant_id,
+        relationships=[
+            resource_relationship_response(relationship)
+            for relationship in result.relationships
         ],
     )

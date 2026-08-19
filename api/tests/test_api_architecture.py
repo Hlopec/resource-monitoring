@@ -26,6 +26,7 @@ from app.api.schemas import (
     ResourceDetailsResponse,
     ResourceHistoryResponse,
     ResourcePageResponse,
+    ResourceRelationshipsResponse,
 )
 from app.application.errors import ConcurrentModificationError, ConflictError
 from app.application.errors import ApplicationError
@@ -144,6 +145,33 @@ FORBIDDEN_HISTORY_ROUTE_NAMES = {
     "ResolveCanonicalResourceQuery",
     "get_resolve_canonical_resource_handler",
     "ResourceQueryService",
+}
+FORBIDDEN_RELATIONSHIPS_ROUTE_NAMES = {
+    "GetResourceDetailsHandler",
+    "GetResourceDetailsQuery",
+    "get_get_resource_details_handler",
+    "GetResourceHistoryHandler",
+    "GetResourceHistoryQuery",
+    "get_get_resource_history_handler",
+    "ResolveCanonicalResourceHandler",
+    "ResolveCanonicalResourceQuery",
+    "get_resolve_canonical_resource_handler",
+    "AssignResourceRelationshipHandler",
+    "AssignResourceRelationshipCommand",
+    "get_assign_resource_relationship_handler",
+    "ResourceQueryService",
+}
+FORBIDDEN_GRAPH_TRAVERSAL_NAMES = {
+    "ancestors",
+    "breadth_first",
+    "depth_first",
+    "descendants",
+    "graph_depth",
+    "max_depth",
+    "recursive",
+    "shortest_path",
+    "transitive",
+    "traversal",
 }
 RESOURCE_HANDLER_PROVIDERS = {
     "get_list_resources_handler": ListResourcesHandler,
@@ -316,6 +344,44 @@ def test_resource_history_route_is_isolated_from_details_and_canonical_use_cases
     assert "resource_history_response" in call_names
     assert "handle" in call_names
     assert not any(name in source for name in FORBIDDEN_HISTORY_ROUTE_NAMES)
+
+
+def test_resource_relationships_route_is_current_read_only_and_one_hop() -> None:
+    resource_route_path = API_ROUTES_ROOT / "resources.py"
+    relationships_function = _function_def_for(
+        resource_route_path,
+        "get_resource_relationships",
+    )
+    source = inspect.getsource(resource_routes.get_resource_relationships)
+    call_names = _call_names_for(resource_routes.get_resource_relationships)
+    signature = inspect.signature(resource_routes.get_resource_relationships)
+    handler_parameter = signature.parameters["handler"]
+
+    decorator = relationships_function.decorator_list[0]
+    assert isinstance(decorator, ast.Call)
+    assert isinstance(decorator.func, ast.Attribute)
+    assert decorator.func.attr == "get"
+    assert isinstance(decorator.args[0], ast.Constant)
+    assert decorator.args[0].value == (
+        "/tenants/{tenant_id}/resources/{resource_id}/relationships"
+    )
+    assert any(
+        keyword.arg == "response_model"
+        and isinstance(keyword.value, ast.Name)
+        and keyword.value.id == "ResourceRelationshipsResponse"
+        for keyword in decorator.keywords
+    )
+    assert list(signature.parameters) == ["tenant_id", "resource_id", "handler"]
+    assert isinstance(handler_parameter.default, Depends)
+    assert (
+        handler_parameter.default.dependency
+        is composition.get_get_resource_relationships_handler
+    )
+    assert "GetResourceRelationshipsQuery" in call_names
+    assert "resource_relationships_response" in call_names
+    assert "handle" in call_names
+    assert not any(name in source for name in FORBIDDEN_RELATIONSHIPS_ROUTE_NAMES)
+    assert not any(name in source for name in FORBIDDEN_GRAPH_TRAVERSAL_NAMES)
 
 
 def test_api_schemas_are_pydantic_transport_contracts_not_orm_models() -> None:
@@ -523,7 +589,7 @@ def test_fastapi_app_imports_and_existing_system_routes_work() -> None:
     assert health_response.json() == {"status": "healthy"}
 
 
-def test_api_v1_router_contains_only_resource_list_details_and_history_endpoints() -> None:
+def test_api_v1_router_contains_only_resource_read_endpoints() -> None:
     route_paths = {route.path for route in app.routes}
     api_v1_paths = {route.path for route in api_v1_router.routes}
     resource_routes = [
@@ -537,13 +603,16 @@ def test_api_v1_router_contains_only_resource_list_details_and_history_endpoints
         "/api/v1/tenants/{tenant_id}/resources",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/history",
+        "/api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships",
     }
     assert "/api/v1/resources" not in route_paths
     assert [route.path for route in resource_routes] == [
         "/api/v1/tenants/{tenant_id}/resources",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/history",
+        "/api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships",
     ]
     assert resource_routes[0].response_model is ResourcePageResponse
     assert resource_routes[1].response_model is ResourceDetailsResponse
     assert resource_routes[2].response_model is ResourceHistoryResponse
+    assert resource_routes[3].response_model is ResourceRelationshipsResponse

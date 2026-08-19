@@ -176,6 +176,8 @@ Explicit mapping functions live in `app.api.mappers.resources`:
 - `resource_classification_history_response(result: ResourceClassificationHistoryResult) -> ResourceClassificationHistoryResponse`
 - `resource_identifier_history_response(result: ResourceIdentifierHistoryResult) -> ResourceIdentifierHistoryResponse`
 - `resource_history_response(result: ResourceHistoryResult) -> ResourceHistoryResponse`
+- `resource_relationship_response(result: ResourceRelationshipResult) -> ResourceRelationshipResponse`
+- `resource_relationships_response(result: ResourceRelationshipsResult) -> ResourceRelationshipsResponse`
 
 These functions construct response schemas field by field. There is no generic serializer, serializer registry, reflection mapper, DTO framework, or `model_validate(..., from_attributes=True)` shortcut over arbitrary objects.
 
@@ -486,6 +488,7 @@ The current production Resource route inventory is exactly:
 GET /api/v1/tenants/{tenant_id}/resources
 GET /api/v1/tenants/{tenant_id}/resources/{resource_id}
 GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/history
+GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships
 ```
 
 ## Resource History API
@@ -600,6 +603,105 @@ Malformed `tenant_id` or `resource_id` values are FastAPI transport validation e
 
 The history endpoint is separate from details. It does not call `GetResourceDetailsHandler`, construct `GetResourceDetailsQuery`, use `get_get_resource_details_handler`, aggregate a details payload, compute diffs, or add relationship history. It also does not automatically resolve canonical resources: it does not call `ResolveCanonicalResourceHandler`, construct `ResolveCanonicalResourceQuery`, redirect, perform a second lookup against a canonical target, or replace the requested `resource_id`.
 
+## Resource Relationships API
+
+Stage `04.2.4` adds the Resource Relationships endpoint:
+
+```http
+GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships
+```
+
+The route is a thin transport adapter:
+
+```text
+HTTP path params
+-> FastAPI UUID parsing
+-> GetResourceRelationshipsQuery
+-> GetResourceRelationshipsHandler
+-> ResourceRelationshipsResult
+-> resource_relationships_response(...)
+-> ResourceRelationshipsResponse
+```
+
+The route constructs the application query explicitly:
+
+```python
+GetResourceRelationshipsQuery(
+    tenant_id=tenant_id,
+    resource_id=resource_id,
+)
+```
+
+Both path values are parsed by FastAPI as native `UUID` values and passed directly into the query. The route does not accept relationship filters, cursors, offsets, date ranges, sort controls, direction filters, source/target filters, relationship-type filters, or tenant query overrides because `GetResourceRelationshipsQuery` currently has only `tenant_id` and `resource_id`.
+
+The route depends on `get_get_resource_relationships_handler`, which returns `GetResourceRelationshipsHandler` from the API composition boundary. Route code does not instantiate handlers directly, resolve `UnitOfWorkFactory`, import `SQLAlchemyUnitOfWork`, import repositories, call `ResourceQueryService`, or catch `ApplicationError`.
+
+The response schema is `ResourceRelationshipsResponse`, matching `ResourceRelationshipsResult` exactly:
+
+| Field | Type |
+| --- | --- |
+| `resource_id` | `UUID` |
+| `tenant_id` | `UUID` |
+| `relationships` | `list[ResourceRelationshipResponse]` |
+
+The nested current relationship schema is an exact API-owned projection of `ResourceRelationshipResult`:
+
+| Field | Type |
+| --- | --- |
+| `id` | `UUID` |
+| `relationship_type_id` | `UUID` |
+| `source_resource_id` | `UUID` |
+| `target_resource_id` | `UUID` |
+| `direction` | `str` |
+| `confidence_score` | `ApiDecimal` |
+| `valid_from` | `AwareDatetime` |
+| `source` | `str | None` |
+| `created_at` | `AwareDatetime` |
+
+This endpoint exposes the existing direct/current one-hop application read model. It does not add recursive traversal, multi-hop expansion, transitive closure, shortest-path lookup, ancestor/descendant expansion, cycle detection, relationship history, or related-resource enrichment chains.
+
+The API boundary preserves the exact tuple order returned by the application layer. It does not sort by relationship type, source id, target id, direction, confidence, `valid_from`, or `created_at`. Tuple collections become ordered JSON arrays only.
+
+An existing resource with no current relationships returns `200 OK` with the exact empty relationship envelope:
+
+```json
+{
+  "resource_id": "0198a4a2-0000-7000-8000-000000000001",
+  "tenant_id": "0198a4a2-0000-7000-8000-000000000002",
+  "relationships": []
+}
+```
+
+Example non-empty response shape:
+
+```json
+{
+  "resource_id": "0198a4a2-0000-7000-8000-000000000001",
+  "tenant_id": "0198a4a2-0000-7000-8000-000000000002",
+  "relationships": [
+    {
+      "id": "0198a4a2-0000-7000-8000-000000000902",
+      "relationship_type_id": "0198a4a2-0000-7000-8000-000000000101",
+      "source_resource_id": "0198a4a2-0000-7000-8000-000000000001",
+      "target_resource_id": "0198a4a2-0000-7000-8000-000000000201",
+      "direction": "outgoing",
+      "confidence_score": "0.9500",
+      "valid_from": "2026-08-19T14:20:00Z",
+      "source": "cmdb",
+      "created_at": "2026-08-19T14:21:00Z"
+    }
+  ]
+}
+```
+
+`UUID`, `AwareDatetime`, `ApiDecimal`, and `None` reuse the common serialization policy. Decimal values are emitted as JSON strings to preserve precision, aware datetimes are emitted as ISO-8601 strings, and nullable fields such as `source` remain JSON `null`.
+
+Malformed `tenant_id` or `resource_id` values are FastAPI transport validation errors. Missing resources and wrong-tenant resources are handled by application errors and centralized API error translation as the same non-disclosing `404 not_found` envelope. Persistence failures propagate to the centralized `503 service_unavailable` envelope without SQL, SQLSTATE, constraint names, or stack traces.
+
+The relationships endpoint is separate from details and history. It does not call `GetResourceDetailsHandler`, `GetResourceDetailsQuery`, `GetResourceHistoryHandler`, `GetResourceHistoryQuery`, their providers, or perform N+1 secondary resource reads. It also does not automatically resolve canonical resources and does not call `ResolveCanonicalResourceHandler`, construct `ResolveCanonicalResourceQuery`, redirect, perform a second lookup against a canonical target, or replace requested/source/target ids.
+
+This endpoint is read-only. It does not call `AssignResourceRelationshipHandler`, construct `AssignResourceRelationshipCommand`, or expose relationship create, update, patch, or delete behavior.
+
 ## OpenAPI Policy
 
 OpenAPI tags, operation ids, status codes, examples, and schema metadata belong to API modules only. Application commands, queries, handlers, and results must remain unaware of OpenAPI. Stage `04.1.3` only verifies that common schemas can be included in generated OpenAPI components; operation metadata hardening remains deferred.
@@ -630,12 +732,13 @@ Architecture tests enforce:
 - handler providers produce fresh instances and no global handler singletons are introduced;
 - `main.py` stays bootstrap-oriented;
 - the FastAPI app imports and keeps `/` and `/health` working;
-- the `/api/v1` production Resource route inventory contains only `GET /api/v1/tenants/{tenant_id}/resources`, `GET /api/v1/tenants/{tenant_id}/resources/{resource_id}`, and `GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/history`;
+- the `/api/v1` production Resource route inventory contains only `GET /api/v1/tenants/{tenant_id}/resources`, `GET /api/v1/tenants/{tenant_id}/resources/{resource_id}`, `GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/history`, and `GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships`;
 - Resource routes do not import or call canonical resolution handlers, queries, or providers;
 - the Resource history route does not call Resource details handlers, queries, or providers;
+- the Resource relationships route does not call Resource details handlers, Resource history handlers, canonical resolution handlers, relationship write handlers, or graph traversal helpers;
 - Resource routes use API-owned response models and do not call transaction methods;
 - command bus, mediator, handler registry, and service locator patterns are not introduced.
 
 ## Deferred Work
 
-Stage `04.1` is complete and Stage `04.2` has list, details, and history Resource read endpoints. The next planned step is `04.2.4 — Implement Resource Relationships API`. Deferred work includes Resource relationship endpoints, identity lookup endpoints, canonical resolution endpoints, write endpoints, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
+Stage `04.1` is complete and Stage `04.2` has list, details, history, and relationships Resource read endpoints. The next planned step is `04.2.5 — Implement Resource Identity and Canonical Resolution API`. Deferred work includes identity lookup endpoints, canonical resolution endpoints, write endpoints, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
