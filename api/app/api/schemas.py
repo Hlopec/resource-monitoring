@@ -95,6 +95,23 @@ class ResourceCreatedResponse(ApiSchema):
     record_version: int
 
 
+class TransitionResourceStateRequest(ApiSchema):
+    lifecycle_status_id: UUID
+    criticality_id: UUID
+    exposure_level_id: UUID
+    source_priority: int
+    confidence_score: ApiDecimal
+    transitioned_at: AwareDatetime
+    source: str | None = None
+
+
+class ResourceStateTransitionedResponse(ApiSchema):
+    resource_id: UUID
+    previous_state_id: UUID | None
+    new_state_id: UUID
+    transitioned_at: AwareDatetime
+
+
 class ResourceReadResponse(ApiSchema):
     id: UUID
     tenant_id: UUID

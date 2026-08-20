@@ -33,6 +33,8 @@ from app.api.schemas import (
     ResourceIdentifierLookupResponse,
     ResourcePageResponse,
     ResourceRelationshipsResponse,
+    ResourceStateTransitionedResponse,
+    TransitionResourceStateRequest,
 )
 from app.application.errors import ConcurrentModificationError, ConflictError
 from app.application.errors import ApplicationError
@@ -166,6 +168,43 @@ FORBIDDEN_CREATE_ROUTE_NAMES = {
     "MergeResourceCommand",
     "TransitionResourceStateHandler",
     "TransitionResourceStateCommand",
+    "ResourceQueryService",
+    "UnitOfWork",
+    "SQLAlchemyUnitOfWork",
+    "commit",
+    "rollback",
+    "flush",
+}
+FORBIDDEN_TRANSITION_ROUTE_NAMES = {
+    "CreateResourceHandler",
+    "CreateResourceCommand",
+    "get_create_resource_handler",
+    "GetResourceByIdHandler",
+    "GetResourceByIdQuery",
+    "get_get_resource_by_id_handler",
+    "GetResourceDetailsHandler",
+    "GetResourceDetailsQuery",
+    "get_get_resource_details_handler",
+    "GetResourceHistoryHandler",
+    "GetResourceHistoryQuery",
+    "get_get_resource_history_handler",
+    "ResolveCanonicalResourceHandler",
+    "ResolveCanonicalResourceQuery",
+    "get_resolve_canonical_resource_handler",
+    "AssignResourceAliasHandler",
+    "AssignResourceAliasCommand",
+    "AssignResourceClassificationHandler",
+    "AssignResourceClassificationCommand",
+    "AssignResourceIdentifierHandler",
+    "AssignResourceIdentifierCommand",
+    "AssignResourceLabelHandler",
+    "AssignResourceLabelCommand",
+    "AssignResourceOwnershipHandler",
+    "AssignResourceOwnershipCommand",
+    "AssignResourceRelationshipHandler",
+    "AssignResourceRelationshipCommand",
+    "MergeResourceHandler",
+    "MergeResourceCommand",
     "ResourceQueryService",
     "UnitOfWork",
     "SQLAlchemyUnitOfWork",
@@ -427,6 +466,75 @@ def test_resource_create_route_is_explicit_handler_owned_transaction() -> None:
         "confidence_score",
         "first_seen_at",
         "last_seen_at",
+    ]
+    assert command_calls[0].args == []
+
+
+def test_resource_state_transition_route_is_explicit_handler_owned_transaction() -> None:
+    resource_route_path = API_ROUTES_ROOT / "resources.py"
+    transition_function = _function_def_for(
+        resource_route_path,
+        "transition_resource_state",
+    )
+    source = inspect.getsource(resource_routes.transition_resource_state)
+    call_names = _call_names_for(resource_routes.transition_resource_state)
+    signature = inspect.signature(resource_routes.transition_resource_state)
+    hints = get_type_hints(resource_routes.transition_resource_state)
+    handler_parameter = signature.parameters["handler"]
+
+    decorator = transition_function.decorator_list[0]
+    assert isinstance(decorator, ast.Call)
+    assert isinstance(decorator.func, ast.Attribute)
+    assert decorator.func.attr == "post"
+    assert isinstance(decorator.args[0], ast.Constant)
+    assert decorator.args[0].value == (
+        "/tenants/{tenant_id}/resources/{resource_id}/state-transitions"
+    )
+    assert any(
+        keyword.arg == "response_model"
+        and isinstance(keyword.value, ast.Name)
+        and keyword.value.id == "ResourceStateTransitionedResponse"
+        for keyword in decorator.keywords
+    )
+    assert not any(keyword.arg == "status_code" for keyword in decorator.keywords)
+    assert list(signature.parameters) == [
+        "tenant_id",
+        "resource_id",
+        "request",
+        "handler",
+    ]
+    assert hints["request"] is TransitionResourceStateRequest
+    assert hints["return"] is ResourceStateTransitionedResponse
+    assert isinstance(handler_parameter.default, Depends)
+    assert (
+        handler_parameter.default.dependency
+        is composition.get_transition_resource_state_handler
+    )
+    assert "TransitionResourceStateCommand" in call_names
+    assert "resource_state_transitioned_response" in call_names
+    assert "handle" in call_names
+    assert "model_dump" not in source
+    assert "**" not in source
+    assert not any(name in source for name in FORBIDDEN_TRANSITION_ROUTE_NAMES)
+
+    command_calls = [
+        node
+        for node in ast.walk(transition_function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "TransitionResourceStateCommand"
+    ]
+    assert len(command_calls) == 1
+    assert [keyword.arg for keyword in command_calls[0].keywords] == [
+        "tenant_id",
+        "resource_id",
+        "lifecycle_status_id",
+        "criticality_id",
+        "exposure_level_id",
+        "source_priority",
+        "confidence_score",
+        "transitioned_at",
+        "source",
     ]
     assert command_calls[0].args == []
 
@@ -834,6 +942,10 @@ def test_api_v1_router_contains_only_expected_resource_operations() -> None:
             "GET",
             "/api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships",
         ),
+        (
+            "POST",
+            "/api/v1/tenants/{tenant_id}/resources/{resource_id}/state-transitions",
+        ),
     }
     assert "/api/v1/resources" not in route_paths
     assert [(sorted(route.methods), route.path) for route in resource_operations] == [
@@ -846,6 +958,10 @@ def test_api_v1_router_contains_only_expected_resource_operations() -> None:
         (["GET"], "/api/v1/tenants/{tenant_id}/resources"),
         (["POST"], "/api/v1/tenants/{tenant_id}/resources"),
         (["GET"], "/api/v1/tenants/{tenant_id}/resources/{resource_id}"),
+        (
+            ["POST"],
+            "/api/v1/tenants/{tenant_id}/resources/{resource_id}/state-transitions",
+        ),
         (
             ["GET"],
             "/api/v1/tenants/{tenant_id}/resources/{resource_id}/history",
@@ -866,6 +982,7 @@ def test_api_v1_router_contains_only_expected_resource_operations() -> None:
         "/api/v1/tenants/{tenant_id}/resources",
         "/api/v1/tenants/{tenant_id}/resources",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}",
+        "/api/v1/tenants/{tenant_id}/resources/{resource_id}/state-transitions",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/history",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical",
@@ -876,6 +993,7 @@ def test_api_v1_router_contains_only_expected_resource_operations() -> None:
     assert resource_operations[3].response_model is ResourcePageResponse
     assert resource_operations[4].response_model is ResourceCreatedResponse
     assert resource_operations[5].response_model is ResourceDetailsResponse
-    assert resource_operations[6].response_model is ResourceHistoryResponse
-    assert resource_operations[7].response_model is ResourceRelationshipsResponse
-    assert resource_operations[8].response_model is CanonicalResourceResolvedResponse
+    assert resource_operations[6].response_model is ResourceStateTransitionedResponse
+    assert resource_operations[7].response_model is ResourceHistoryResponse
+    assert resource_operations[8].response_model is ResourceRelationshipsResponse
+    assert resource_operations[9].response_model is CanonicalResourceResolvedResponse

@@ -22,6 +22,7 @@ from app.api.mappers.resources import (
     resource_relationship_response,
     resource_relationships_response,
     resource_state_history_response,
+    resource_state_transitioned_response,
     resource_state_response,
     resource_summary_response,
 )
@@ -48,6 +49,7 @@ __all__ = [
     "resource_relationship_response",
     "resource_relationships_response",
     "resource_state_history_response",
+    "resource_state_transitioned_response",
     "resource_state_response",
     "resource_summary_response",
 ]

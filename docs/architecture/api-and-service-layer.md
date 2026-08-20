@@ -165,6 +165,7 @@ Explicit mapping functions live in `app.api.mappers.resources`:
 - `resource_summary_response(result: ResourceSummaryResult) -> ResourceSummaryResponse`
 - `resource_page_response(result: ResourcePageResult) -> ResourcePageResponse`
 - `resource_created_response(result: ResourceCreatedResult) -> ResourceCreatedResponse`
+- `resource_state_transitioned_response(result: ResourceStateTransitionedResult) -> ResourceStateTransitionedResponse`
 - `resource_read_response(result: ResourceReadResult) -> ResourceReadResponse`
 - `resource_state_response(result: ResourceStateResult) -> ResourceStateResponse`
 - `resource_identifier_response(result: ResourceIdentifierResult) -> ResourceIdentifierResponse`
@@ -1075,6 +1076,144 @@ GET  /api/v1/tenants/{tenant_id}/resource-lookups/identifier
 GET  /api/v1/tenants/{tenant_id}/resource-lookups/alias
 ```
 
+Stage `04.3.2` adds exactly one additional Resource command endpoint:
+
+```http
+POST /api/v1/tenants/{tenant_id}/resources/{resource_id}/state-transitions
+```
+
+This endpoint exposes the existing application state-transition use case only:
+
+```text
+HTTP path + JSON body
+-> FastAPI / Pydantic transport parsing
+-> TransitionResourceStateCommand
+-> get_transition_resource_state_handler
+-> TransitionResourceStateHandler
+-> ResourceStateTransitionedResult
+-> resource_state_transitioned_response(...)
+-> ResourceStateTransitionedResponse
+-> 200 OK
+```
+
+No identifier assignment, ownership assignment, classification assignment, label assignment, alias assignment, relationship assignment, merge, bulk state transition, `PATCH`, `PUT`, state deletion, history mutation, ETag, `If-Match`, idempotency framework, post-transition details fetch, post-transition history fetch, or post-transition canonical resolution is part of this stage.
+
+`TransitionResourceStateRequest` is API-owned and has exactly these body fields:
+
+| Field | Type |
+| --- | --- |
+| `lifecycle_status_id` | `UUID` |
+| `criticality_id` | `UUID` |
+| `exposure_level_id` | `UUID` |
+| `source_priority` | `int` |
+| `confidence_score` | `ApiDecimal` |
+| `transitioned_at` | `AwareDatetime` |
+| `source` | `str | None` |
+
+`tenant_id` and `resource_id` are not request body fields. They come only from the path and are the only authoritative identifiers for the command. The route has no ambient tenant, default tenant, global Resource, or query-parameter override.
+
+The route constructs the command explicitly field by field:
+
+```python
+TransitionResourceStateCommand(
+    tenant_id=tenant_id,
+    resource_id=resource_id,
+    lifecycle_status_id=request.lifecycle_status_id,
+    criticality_id=request.criticality_id,
+    exposure_level_id=request.exposure_level_id,
+    source_priority=request.source_priority,
+    confidence_score=request.confidence_score,
+    transitioned_at=request.transitioned_at,
+    source=request.source,
+)
+```
+
+The route must not use `request.model_dump()`, `**kwargs`, reflection mapping, generic command factories, a command bus, mediator, handler registry, or service locator.
+
+`confidence_score` follows the request-side Decimal convention established by Stage `04.3.1`: precision-sensitive clients should send decimal-compatible JSON string values, for example `"0.123456789123456789123456789"`. The route passes the accepted `Decimal` unchanged and does not convert through `float`, round, quantize, or normalize scale.
+
+`transitioned_at` uses the shared `AwareDatetime` transport policy. Aware UTC and aware non-UTC timestamps are accepted and passed unchanged into the command. Naive datetimes are rejected as transport validation errors. The route does not inject a timezone, convert to server local timezone, strip offsets, or normalize the timestamp.
+
+`source` is optional. When omitted, the command receives `None`. When a client explicitly sends `""`, the route preserves the empty string and leaves any rejection to the application layer. The route does not trim, normalize, or replace source values with defaults.
+
+Application handlers remain authoritative for Resource existence, tenant scope, lifecycle status validity, criticality validity, exposure validity, source-priority rules, confidence-score rules, transition timestamp invariants, current-state replacement semantics, temporal closeout behavior, and conflict/concurrency rules. The API layer only validates HTTP shape and scalar parsing.
+
+The route depends on:
+
+```python
+handler: TransitionResourceStateHandler = Depends(
+    get_transition_resource_state_handler
+)
+```
+
+It does not instantiate handlers directly, resolve `UnitOfWorkFactory`, import `SQLAlchemyUnitOfWork`, import repositories, open a Unit of Work, start a transaction, lock rows, retry, commit, roll back, flush, read current state directly, or close current state directly. `TransitionResourceStateHandler` remains the sole transaction owner.
+
+The response schema is `ResourceStateTransitionedResponse`, matching `ResourceStateTransitionedResult` exactly:
+
+| Field | Type |
+| --- | --- |
+| `resource_id` | `UUID` |
+| `previous_state_id` | `UUID | None` |
+| `new_state_id` | `UUID` |
+| `transitioned_at` | `AwareDatetime` |
+
+Successful state transition returns `200 OK` and the compact transition result. The API does not add `tenant_id`, lifecycle status, criticality, exposure, source priority, confidence, a full state object, Resource Details, links, or metadata.
+
+Example request:
+
+```json
+{
+  "lifecycle_status_id": "0198a4a2-0000-7000-8000-000000000101",
+  "criticality_id": "0198a4a2-0000-7000-8000-000000000102",
+  "exposure_level_id": "0198a4a2-0000-7000-8000-000000000103",
+  "source_priority": 11,
+  "confidence_score": "0.8750",
+  "transitioned_at": "2026-08-20T10:30:00+00:00",
+  "source": "cmdb"
+}
+```
+
+Example `200 OK` response:
+
+```json
+{
+  "resource_id": "0198a4a2-0000-7000-8000-000000000201",
+  "previous_state_id": null,
+  "new_state_id": "0198a4a2-0000-7000-8000-000000000202",
+  "transitioned_at": "2026-08-20T10:30:00+00:00"
+}
+```
+
+After `handler.handle(command)`, the route returns directly from `ResourceStateTransitionedResult`. It does not call `GetResourceDetailsHandler`, `GetResourceHistoryHandler`, `GetResourceByIdHandler`, `ResolveCanonicalResourceHandler`, `ResourceQueryService`, repositories, or a second Unit of Work. There is no read-after-write enrichment, history fetch, details projection, or canonical resolution.
+
+Application errors propagate to the centralized API error handler:
+
+| Application error | HTTP policy |
+| --- | --- |
+| `ValidationError` | `422 validation_error` |
+| `EntityNotFoundError` | `404 not_found` |
+| `TenantBoundaryError` | `404 not_found` |
+| `ConflictError` | `409 conflict` |
+| `ConcurrentModificationError` | `409 concurrent_modification` |
+| `PersistenceError` | `503 service_unavailable` |
+
+`ConcurrentModificationError` remains distinct from generic conflict handling at the centralized error boundary. The route does not add ETag, `If-Match`, version headers, or local application-error translation.
+
+The production Resource API operation inventory after Stage `04.3.2` is exactly:
+
+```text
+GET  /api/v1/tenants/{tenant_id}/resource-lookups/canonical-name
+GET  /api/v1/tenants/{tenant_id}/resource-lookups/identifier
+GET  /api/v1/tenants/{tenant_id}/resource-lookups/alias
+GET  /api/v1/tenants/{tenant_id}/resources
+POST /api/v1/tenants/{tenant_id}/resources
+GET  /api/v1/tenants/{tenant_id}/resources/{resource_id}
+POST /api/v1/tenants/{tenant_id}/resources/{resource_id}/state-transitions
+GET  /api/v1/tenants/{tenant_id}/resources/{resource_id}/history
+GET  /api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships
+GET  /api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical
+```
+
 ## OpenAPI Policy
 
 OpenAPI tags, operation ids, status codes, examples, and schema metadata belong to API modules only. Application commands, queries, handlers, and results must remain unaware of OpenAPI. Stage `04.1.3` only verifies that common schemas can be included in generated OpenAPI components; operation metadata hardening remains deferred.
@@ -1105,10 +1244,13 @@ Architecture tests enforce:
 - handler providers produce fresh instances and no global handler singletons are introduced;
 - `main.py` stays bootstrap-oriented;
 - the FastAPI app imports and keeps `/` and `/health` working;
-- the `/api/v1` production Resource operation inventory contains only list, create, details, history, relationships, explicit canonical resolution, and three static Resource lookup routes;
+- the `/api/v1` production Resource operation inventory contains only list, create, state transition, details, history, relationships, explicit canonical resolution, and three static Resource lookup routes;
 - the Resource create route calls only `CreateResourceHandler`, constructs only `CreateResourceCommand`, returns `201 Created`, and maps only `ResourceCreatedResult`;
 - the Resource create request schema has no `tenant_id` body field and uses the path tenant as the only authoritative tenant source;
 - the Resource create route does not open transactions, call `commit()`, `rollback()`, or `flush()`, perform preflight reads, or read after write;
+- the Resource state-transition route calls only `TransitionResourceStateHandler`, constructs only `TransitionResourceStateCommand`, returns `200 OK`, and maps only `ResourceStateTransitionedResult`;
+- the Resource state-transition request schema has no `tenant_id` or `resource_id` body fields and uses path identifiers as the only authoritative identifiers;
+- the Resource state-transition route does not open transactions, call `commit()`, `rollback()`, or `flush()`, read current state directly, perform preflight reads, read after write, or invoke unrelated write handlers;
 - Resource details, history, relationships, and lookup routes do not import or call canonical resolution handlers, queries, or providers;
 - the Resource history route does not call Resource details handlers, queries, or providers;
 - the Resource relationships route does not call Resource details handlers, Resource history handlers, canonical resolution handlers, relationship write handlers, or graph traversal helpers;
@@ -1120,4 +1262,4 @@ Architecture tests enforce:
 
 ## Deferred Work
 
-Stage `04.1` is complete, Stage `04.2` has list, details, history, relationships, identity lookup, and explicit canonical-resolution Resource read endpoints, and Stage `04.3.1` has the first Resource command endpoint for creation. The next planned step is `04.3.2 — Implement Resource State Transition API`. Deferred work includes additional write endpoints, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
+Stage `04.1` is complete, Stage `04.2` has list, details, history, relationships, identity lookup, and explicit canonical-resolution Resource read endpoints, and Stage `04.3` has Resource creation and state-transition command endpoints. The next planned step is `04.3.3 — Implement Resource Identifier Assignment API`. Deferred work includes additional write endpoints, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.

@@ -22,6 +22,7 @@ from app.api.schemas import (
     ResourceLabelHistoryResponse,
     ResourceOwnershipHistoryResponse,
     ResourceStateHistoryResponse,
+    ResourceStateTransitionedResponse,
     ResourceStateResponse,
     ResourceSummaryResponse,
 )
@@ -47,6 +48,7 @@ from app.application.results import (
     ResourceRelationshipResult,
     ResourceRelationshipsResult,
     ResourceStateHistoryResult,
+    ResourceStateTransitionedResult,
     ResourceStateResult,
     ResourceSummaryResult,
 )
@@ -87,6 +89,17 @@ def resource_created_response(
         tenant_id=result.tenant_id,
         canonical_name=result.canonical_name,
         record_version=result.record_version,
+    )
+
+
+def resource_state_transitioned_response(
+    result: ResourceStateTransitionedResult,
+) -> ResourceStateTransitionedResponse:
+    return ResourceStateTransitionedResponse(
+        resource_id=result.resource_id,
+        previous_state_id=result.previous_state_id,
+        new_state_id=result.new_state_id,
+        transitioned_at=result.transitioned_at,
     )
 
 
