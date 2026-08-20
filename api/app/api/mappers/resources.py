@@ -8,6 +8,7 @@ from app.api.schemas import (
     ResourceClassificationResponse,
     ResourceDetailsResponse,
     ResourceHistoryResponse,
+    ResourceIdentifierAssignedResponse,
     ResourceIdentifierResponse,
     ResourceIdentifierLookupResponse,
     ResourceLabelResponse,
@@ -35,6 +36,7 @@ from app.application.results import (
     ResourceClassificationResult,
     ResourceDetailsResult,
     ResourceHistoryResult,
+    ResourceIdentifierAssignedResult,
     ResourceIdentifierHistoryResult,
     ResourceIdentifierLookupResult,
     ResourceIdentifierResult,
@@ -100,6 +102,22 @@ def resource_state_transitioned_response(
         previous_state_id=result.previous_state_id,
         new_state_id=result.new_state_id,
         transitioned_at=result.transitioned_at,
+    )
+
+
+def resource_identifier_assigned_response(
+    result: ResourceIdentifierAssignedResult,
+) -> ResourceIdentifierAssignedResponse:
+    return ResourceIdentifierAssignedResponse(
+        resource_id=result.resource_id,
+        identifier_id=result.identifier_id,
+        identifier_type_id=result.identifier_type_id,
+        original_value=result.original_value,
+        normalized_value=result.normalized_value,
+        value_hash=result.value_hash,
+        namespace=result.namespace,
+        is_primary=result.is_primary,
+        valid_from=result.valid_from,
     )
 
 

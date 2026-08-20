@@ -112,6 +112,29 @@ class ResourceStateTransitionedResponse(ApiSchema):
     transitioned_at: AwareDatetime
 
 
+class AssignResourceIdentifierRequest(ApiSchema):
+    identifier_type_id: UUID
+    original_value: str
+    normalized_value: str
+    value_hash: str
+    namespace: str | None = None
+    is_primary: bool
+    confidence_score: ApiDecimal
+    valid_from: AwareDatetime
+
+
+class ResourceIdentifierAssignedResponse(ApiSchema):
+    resource_id: UUID
+    identifier_id: UUID
+    identifier_type_id: UUID
+    original_value: str
+    normalized_value: str
+    value_hash: str
+    namespace: str | None
+    is_primary: bool
+    valid_from: AwareDatetime
+
+
 class ResourceReadResponse(ApiSchema):
     id: UUID
     tenant_id: UUID
