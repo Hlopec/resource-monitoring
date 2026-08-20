@@ -25,7 +25,9 @@ from app.api.schemas import (
     ApiErrorResponse,
     ApiSchema,
     CanonicalResourceResolvedResponse,
+    CreateResourceRequest,
     ResourceAliasLookupResponse,
+    ResourceCreatedResponse,
     ResourceDetailsResponse,
     ResourceHistoryResponse,
     ResourceIdentifierLookupResponse,
@@ -137,6 +139,39 @@ FORBIDDEN_FRAMEWORK_NAMES = {
 }
 FORBIDDEN_RESOURCE_ROUTE_NAMES = {
     "ResourceQueryService",
+}
+FORBIDDEN_CREATE_ROUTE_NAMES = {
+    "GetResourceByIdHandler",
+    "GetResourceByIdQuery",
+    "get_get_resource_by_id_handler",
+    "GetResourceDetailsHandler",
+    "GetResourceDetailsQuery",
+    "get_get_resource_details_handler",
+    "ResolveCanonicalResourceHandler",
+    "ResolveCanonicalResourceQuery",
+    "get_resolve_canonical_resource_handler",
+    "AssignResourceAliasHandler",
+    "AssignResourceAliasCommand",
+    "AssignResourceClassificationHandler",
+    "AssignResourceClassificationCommand",
+    "AssignResourceIdentifierHandler",
+    "AssignResourceIdentifierCommand",
+    "AssignResourceLabelHandler",
+    "AssignResourceLabelCommand",
+    "AssignResourceOwnershipHandler",
+    "AssignResourceOwnershipCommand",
+    "AssignResourceRelationshipHandler",
+    "AssignResourceRelationshipCommand",
+    "MergeResourceHandler",
+    "MergeResourceCommand",
+    "TransitionResourceStateHandler",
+    "TransitionResourceStateCommand",
+    "ResourceQueryService",
+    "UnitOfWork",
+    "SQLAlchemyUnitOfWork",
+    "commit",
+    "rollback",
+    "flush",
 }
 FORBIDDEN_CANONICAL_ROUTE_NAMES = {
     "GetResourceDetailsHandler",
@@ -336,6 +371,64 @@ def test_resource_details_route_remains_isolated_from_canonical_resolution() -> 
     assert "ResolveCanonicalResourceQuery" not in source
     assert "get_resolve_canonical_resource_handler" not in source
     assert "ResolveCanonicalResourceHandler" not in source
+
+
+def test_resource_create_route_is_explicit_handler_owned_transaction() -> None:
+    resource_route_path = API_ROUTES_ROOT / "resources.py"
+    create_function = _function_def_for(resource_route_path, "create_resource")
+    source = inspect.getsource(resource_routes.create_resource)
+    call_names = _call_names_for(resource_routes.create_resource)
+    signature = inspect.signature(resource_routes.create_resource)
+    hints = get_type_hints(resource_routes.create_resource)
+    handler_parameter = signature.parameters["handler"]
+
+    decorator = create_function.decorator_list[0]
+    assert isinstance(decorator, ast.Call)
+    assert isinstance(decorator.func, ast.Attribute)
+    assert decorator.func.attr == "post"
+    assert isinstance(decorator.args[0], ast.Constant)
+    assert decorator.args[0].value == "/tenants/{tenant_id}/resources"
+    assert any(
+        keyword.arg == "response_model"
+        and isinstance(keyword.value, ast.Name)
+        and keyword.value.id == "ResourceCreatedResponse"
+        for keyword in decorator.keywords
+    )
+    assert any(keyword.arg == "status_code" for keyword in decorator.keywords)
+    assert list(signature.parameters) == ["tenant_id", "request", "handler"]
+    assert hints["request"] is CreateResourceRequest
+    assert hints["return"] is ResourceCreatedResponse
+    assert isinstance(handler_parameter.default, Depends)
+    assert handler_parameter.default.dependency is composition.get_create_resource_handler
+    assert "CreateResourceCommand" in call_names
+    assert "resource_created_response" in call_names
+    assert "handle" in call_names
+    assert "model_dump" not in source
+    assert "**" not in source
+    assert not any(name in source for name in FORBIDDEN_CREATE_ROUTE_NAMES)
+
+    command_calls = [
+        node
+        for node in ast.walk(create_function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "CreateResourceCommand"
+    ]
+    assert len(command_calls) == 1
+    assert [keyword.arg for keyword in command_calls[0].keywords] == [
+        "tenant_id",
+        "resource_type_id",
+        "canonical_name",
+        "display_name",
+        "lifecycle_status_id",
+        "criticality_id",
+        "exposure_level_id",
+        "source_priority",
+        "confidence_score",
+        "first_seen_at",
+        "last_seen_at",
+    ]
+    assert command_calls[0].args == []
 
 
 def test_resource_history_route_is_isolated_from_details_and_canonical_use_cases() -> None:
@@ -713,42 +806,76 @@ def test_fastapi_app_imports_and_existing_system_routes_work() -> None:
     assert health_response.json() == {"status": "healthy"}
 
 
-def test_api_v1_router_contains_only_resource_read_endpoints() -> None:
+def test_api_v1_router_contains_only_expected_resource_operations() -> None:
     route_paths = {route.path for route in app.routes}
-    api_v1_paths = {route.path for route in api_v1_router.routes}
-    resource_routes = [
+    api_v1_operations = {
+        (method, route.path)
+        for route in api_v1_router.routes
+        for method in route.methods
+        if method in {"GET", "POST", "PUT", "PATCH", "DELETE"}
+    }
+    resource_operations = [
         route
         for route in app.routes
         if getattr(route, "path", "").startswith("/api/v1/tenants/")
     ]
 
     assert api_v1_router.prefix == "/api/v1"
-    assert api_v1_paths == {
-        "/api/v1/tenants/{tenant_id}/resource-lookups/alias",
-        "/api/v1/tenants/{tenant_id}/resource-lookups/canonical-name",
-        "/api/v1/tenants/{tenant_id}/resource-lookups/identifier",
-        "/api/v1/tenants/{tenant_id}/resources",
-        "/api/v1/tenants/{tenant_id}/resources/{resource_id}",
-        "/api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical",
-        "/api/v1/tenants/{tenant_id}/resources/{resource_id}/history",
-        "/api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships",
+    assert api_v1_operations == {
+        ("GET", "/api/v1/tenants/{tenant_id}/resource-lookups/alias"),
+        ("GET", "/api/v1/tenants/{tenant_id}/resource-lookups/canonical-name"),
+        ("GET", "/api/v1/tenants/{tenant_id}/resource-lookups/identifier"),
+        ("GET", "/api/v1/tenants/{tenant_id}/resources"),
+        ("POST", "/api/v1/tenants/{tenant_id}/resources"),
+        ("GET", "/api/v1/tenants/{tenant_id}/resources/{resource_id}"),
+        ("GET", "/api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical"),
+        ("GET", "/api/v1/tenants/{tenant_id}/resources/{resource_id}/history"),
+        (
+            "GET",
+            "/api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships",
+        ),
     }
     assert "/api/v1/resources" not in route_paths
-    assert [route.path for route in resource_routes] == [
+    assert [(sorted(route.methods), route.path) for route in resource_operations] == [
+        (
+            ["GET"],
+            "/api/v1/tenants/{tenant_id}/resource-lookups/canonical-name",
+        ),
+        (["GET"], "/api/v1/tenants/{tenant_id}/resource-lookups/identifier"),
+        (["GET"], "/api/v1/tenants/{tenant_id}/resource-lookups/alias"),
+        (["GET"], "/api/v1/tenants/{tenant_id}/resources"),
+        (["POST"], "/api/v1/tenants/{tenant_id}/resources"),
+        (["GET"], "/api/v1/tenants/{tenant_id}/resources/{resource_id}"),
+        (
+            ["GET"],
+            "/api/v1/tenants/{tenant_id}/resources/{resource_id}/history",
+        ),
+        (
+            ["GET"],
+            "/api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships",
+        ),
+        (
+            ["GET"],
+            "/api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical",
+        ),
+    ]
+    assert [route.path for route in resource_operations] == [
         "/api/v1/tenants/{tenant_id}/resource-lookups/canonical-name",
         "/api/v1/tenants/{tenant_id}/resource-lookups/identifier",
         "/api/v1/tenants/{tenant_id}/resource-lookups/alias",
+        "/api/v1/tenants/{tenant_id}/resources",
         "/api/v1/tenants/{tenant_id}/resources",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/history",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical",
     ]
-    assert resource_routes[0].response_model is ResourceDetailsResponse
-    assert resource_routes[1].response_model is ResourceIdentifierLookupResponse
-    assert resource_routes[2].response_model is ResourceAliasLookupResponse
-    assert resource_routes[3].response_model is ResourcePageResponse
-    assert resource_routes[4].response_model is ResourceDetailsResponse
-    assert resource_routes[5].response_model is ResourceHistoryResponse
-    assert resource_routes[6].response_model is ResourceRelationshipsResponse
-    assert resource_routes[7].response_model is CanonicalResourceResolvedResponse
+    assert resource_operations[0].response_model is ResourceDetailsResponse
+    assert resource_operations[1].response_model is ResourceIdentifierLookupResponse
+    assert resource_operations[2].response_model is ResourceAliasLookupResponse
+    assert resource_operations[3].response_model is ResourcePageResponse
+    assert resource_operations[4].response_model is ResourceCreatedResponse
+    assert resource_operations[5].response_model is ResourceDetailsResponse
+    assert resource_operations[6].response_model is ResourceHistoryResponse
+    assert resource_operations[7].response_model is ResourceRelationshipsResponse
+    assert resource_operations[8].response_model is CanonicalResourceResolvedResponse

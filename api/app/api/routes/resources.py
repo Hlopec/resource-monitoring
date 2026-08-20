@@ -2,9 +2,10 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, status
 
 from app.api.composition import (
+    get_create_resource_handler,
     get_get_resource_details_handler,
     get_get_resource_history_handler,
     get_get_resource_relationships_handler,
@@ -13,6 +14,7 @@ from app.api.composition import (
 )
 from app.api.mappers import (
     canonical_resource_resolved_response,
+    resource_created_response,
     resource_details_response,
     resource_history_response,
     resource_page_response,
@@ -20,12 +22,16 @@ from app.api.mappers import (
 )
 from app.api.schemas import (
     CanonicalResourceResolvedResponse,
+    CreateResourceRequest,
+    ResourceCreatedResponse,
     ResourceDetailsResponse,
     ResourceHistoryResponse,
     ResourcePageResponse,
     ResourceRelationshipsResponse,
 )
+from app.application.commands import CreateResourceCommand
 from app.application.handlers import (
+    CreateResourceHandler,
     GetResourceDetailsHandler,
     GetResourceHistoryHandler,
     GetResourceRelationshipsHandler,
@@ -73,6 +79,33 @@ def list_resources(
         cursor=cursor,
     )
     return resource_page_response(handler.handle(query))
+
+
+@router.post(
+    "/tenants/{tenant_id}/resources",
+    response_model=ResourceCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create tenant resource",
+)
+def create_resource(
+    tenant_id: UUID,
+    request: CreateResourceRequest,
+    handler: CreateResourceHandler = Depends(get_create_resource_handler),
+) -> ResourceCreatedResponse:
+    command = CreateResourceCommand(
+        tenant_id=tenant_id,
+        resource_type_id=request.resource_type_id,
+        canonical_name=request.canonical_name,
+        display_name=request.display_name,
+        lifecycle_status_id=request.lifecycle_status_id,
+        criticality_id=request.criticality_id,
+        exposure_level_id=request.exposure_level_id,
+        source_priority=request.source_priority,
+        confidence_score=request.confidence_score,
+        first_seen_at=request.first_seen_at,
+        last_seen_at=request.last_seen_at,
+    )
+    return resource_created_response(handler.handle(command))
 
 
 @router.get(

@@ -75,6 +75,26 @@ class ResourcePageResponse(ApiSchema):
     next_cursor: str | None
 
 
+class CreateResourceRequest(ApiSchema):
+    resource_type_id: UUID
+    canonical_name: str
+    display_name: str
+    lifecycle_status_id: UUID
+    criticality_id: UUID
+    exposure_level_id: UUID
+    source_priority: int
+    confidence_score: ApiDecimal
+    first_seen_at: AwareDatetime
+    last_seen_at: AwareDatetime
+
+
+class ResourceCreatedResponse(ApiSchema):
+    resource_id: UUID
+    tenant_id: UUID
+    canonical_name: str
+    record_version: int
+
+
 class ResourceReadResponse(ApiSchema):
     id: UUID
     tenant_id: UUID
