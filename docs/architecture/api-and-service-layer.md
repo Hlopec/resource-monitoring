@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Stage `04.1.1` defines the first API and service-layer architecture baseline. Stage `04.1.2` adds explicit FastAPI dependency wiring for the existing Block 03 Resource handlers without adding production Resource endpoints. Stage `04.2` adds production Resource read, relationship, identity lookup, and explicit canonical-resolution endpoints. The baseline establishes where FastAPI code lives, how HTTP transport code will call application handlers, how application errors will be translated to HTTP responses, and which dependencies are forbidden across boundaries.
+Stage `04.1.1` defines the first API and service-layer architecture baseline. Stage `04.1.2` adds explicit FastAPI dependency wiring for the existing Block 03 Resource handlers without adding production Resource endpoints. Stage `04.2` adds production Resource read, relationship, identity lookup, and explicit canonical-resolution endpoints. Stage `04.3` starts the production Resource command API. The baseline establishes where FastAPI code lives, how HTTP transport code will call application handlers, how application errors will be translated to HTTP responses, and which dependencies are forbidden across boundaries.
 
 The accepted dependency direction is:
 
@@ -35,7 +35,7 @@ api/app/api/
   schemas.py
 ```
 
-`router.py` composes FastAPI routers. `routes/system.py` owns the existing `/` and `/health` endpoints. `routes/resources.py` owns Resource collection, detail, history, relationship, and explicit canonical-resolution routes. `routes/resource_lookups.py` owns static Resource identity lookup routes so they cannot be shadowed by dynamic `{resource_id}` paths. `schemas.py` owns Pydantic transport contracts, reusable scalar serialization policy, Resource read response shapes, lookup responses, canonical-resolution responses, and the public API error envelope. `mappers/resources.py` owns explicit Resource application-result to API-schema mapping. `errors.py` owns centralized `ApplicationError` to HTTP response mapping. `composition.py` is the explicit composition root where FastAPI dependencies wire application handlers to the application-facing `UnitOfWorkFactory`.
+`router.py` composes FastAPI routers. `routes/system.py` owns the existing `/` and `/health` endpoints. `routes/resources.py` owns Resource collection read/create, detail, history, relationship, and explicit canonical-resolution routes. `routes/resource_lookups.py` owns static Resource identity lookup routes so they cannot be shadowed by dynamic `{resource_id}` paths. `schemas.py` owns Pydantic transport contracts, reusable scalar serialization policy, Resource read/write response shapes, lookup responses, canonical-resolution responses, and the public API error envelope. `mappers/resources.py` owns explicit Resource application-result to API-schema mapping. `errors.py` owns centralized `ApplicationError` to HTTP response mapping. `composition.py` is the explicit composition root where FastAPI dependencies wire application handlers to the application-facing `UnitOfWorkFactory`.
 
 `api/app/main.py` remains bootstrap-oriented: it creates the FastAPI application and includes routers. It should not hold production endpoint logic, SQLAlchemy session access, repositories, or application use-case decisions.
 
@@ -101,7 +101,7 @@ application Result -> Pydantic response schema
 
 ORM entities must not be returned as API schemas and should not be exposed through Pydantic `from_attributes` response models. The current API schemas set `from_attributes=False` to keep that boundary visible.
 
-Full Resource request and response schemas are deferred until production Resource endpoints are implemented.
+Resource request and response schemas are added only as their production endpoints are introduced.
 
 Stage `04.1.3` keeps the schema surface in `api/app/api/schemas.py` because the current API-owned contract set is still small. A separate schema package should be introduced only when multiple meaningful schema modules exist.
 
@@ -164,6 +164,7 @@ Explicit mapping functions live in `app.api.mappers.resources`:
 
 - `resource_summary_response(result: ResourceSummaryResult) -> ResourceSummaryResponse`
 - `resource_page_response(result: ResourcePageResult) -> ResourcePageResponse`
+- `resource_created_response(result: ResourceCreatedResult) -> ResourceCreatedResponse`
 - `resource_read_response(result: ResourceReadResult) -> ResourceReadResponse`
 - `resource_state_response(result: ResourceStateResult) -> ResourceStateResponse`
 - `resource_identifier_response(result: ResourceIdentifierResult) -> ResourceIdentifierResponse`
@@ -488,7 +489,7 @@ Malformed `tenant_id` or `resource_id` values are FastAPI transport validation e
 
 The details endpoint does not automatically resolve canonical resources. It does not call `ResolveCanonicalResourceHandler`, construct `ResolveCanonicalResourceQuery`, redirect, perform a second details lookup against a canonical target, or replace the requested `resource_id`. If `ResourceDetailsResult.outgoing_merge` is present, the route exposes that exact direct merge projection while keeping `id` equal to the requested resource details result.
 
-The current production Resource route inventory is exactly:
+The Stage `04.2` Resource read route inventory is:
 
 ```text
 GET /api/v1/tenants/{tenant_id}/resources
@@ -716,7 +717,7 @@ This endpoint is read-only. It does not call `AssignResourceRelationshipHandler`
 
 Stage `04.2.5` adds explicit Resource identity lookup routes and an explicit canonical-resolution route. These endpoints are read-only transport adapters over existing application query handlers. They do not introduce writes, mutations, generic identity resolver behavior, fuzzy search, partial search, pagination, redirects, caching, persistence access, new database models, migrations, or async SQLAlchemy.
 
-The production Resource API route inventory is exactly:
+The Stage `04.2.5` Resource read route inventory is:
 
 ```text
 GET /api/v1/tenants/{tenant_id}/resources
@@ -927,6 +928,153 @@ Malformed UUID path or query values remain FastAPI transport-validation errors. 
 
 Existing list, details, history, relationships, canonical-name lookup, identifier lookup, and alias lookup routes are canonical-resolution-free. Only `GET /api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical` calls the canonical-resolution handler.
 
+## Resource Command API
+
+Stage `04.3` starts the production Resource Command API. Stage `04.3.1` adds exactly one production write endpoint:
+
+```http
+POST /api/v1/tenants/{tenant_id}/resources
+```
+
+The existing collection read endpoint remains on the same path with a different HTTP method:
+
+```http
+GET /api/v1/tenants/{tenant_id}/resources
+```
+
+FastAPI exposes both operations independently. No `PATCH`, `PUT`, `DELETE`, state transition, identifier assignment, alias assignment, ownership assignment, classification assignment, label assignment, relationship assignment, merge, bulk create, upsert, or delete endpoint is part of this stage.
+
+The create route is a thin transport adapter:
+
+```text
+HTTP path + JSON body
+-> FastAPI / Pydantic transport parsing
+-> CreateResourceCommand
+-> get_create_resource_handler
+-> CreateResourceHandler
+-> ResourceCreatedResult
+-> resource_created_response(...)
+-> ResourceCreatedResponse
+-> 201 Created
+```
+
+`CreateResourceRequest` is API-owned and has exactly these body fields:
+
+| Field | Type |
+| --- | --- |
+| `resource_type_id` | `UUID` |
+| `canonical_name` | `str` |
+| `display_name` | `str` |
+| `lifecycle_status_id` | `UUID` |
+| `criticality_id` | `UUID` |
+| `exposure_level_id` | `UUID` |
+| `source_priority` | `int` |
+| `confidence_score` | `ApiDecimal` |
+| `first_seen_at` | `AwareDatetime` |
+| `last_seen_at` | `AwareDatetime` |
+
+`tenant_id` is not a request body field. The route takes the authoritative tenant scope only from `/tenants/{tenant_id}` and passes that path value into the command. Body extras are not application authority and must not override the path tenant.
+
+The route constructs the command explicitly field by field:
+
+```python
+CreateResourceCommand(
+    tenant_id=tenant_id,
+    resource_type_id=request.resource_type_id,
+    canonical_name=request.canonical_name,
+    display_name=request.display_name,
+    lifecycle_status_id=request.lifecycle_status_id,
+    criticality_id=request.criticality_id,
+    exposure_level_id=request.exposure_level_id,
+    source_priority=request.source_priority,
+    confidence_score=request.confidence_score,
+    first_seen_at=request.first_seen_at,
+    last_seen_at=request.last_seen_at,
+)
+```
+
+The route must not use `request.model_dump()`, `**kwargs`, reflection mapping, generic command factories, a command bus, mediator, handler registry, or service locator. The transport/application mapping must remain visible in route code.
+
+`confidence_score` is passed as a `Decimal` without API rounding or float conversion. Precision-sensitive clients should send decimal-compatible JSON string values, for example `"0.123456789123456789123456789"`, because the current FastAPI/Pydantic JSON-number path does not preserve arbitrary precision before `Decimal` construction. The route does not implement a custom Decimal parser.
+
+`first_seen_at` and `last_seen_at` use the shared `AwareDatetime` transport policy. Naive datetimes are rejected as transport validation errors. Accepted aware datetime values keep their offsets and are passed unchanged into `CreateResourceCommand`; the route does not inject UTC, convert to local machine timezone, strip offsets, or normalize timestamps.
+
+Application handlers remain authoritative for business rules and persistence semantics: tenant existence, catalog existence and active-state checks, canonical-name uniqueness, source-priority rules, confidence-score bounds, and first-seen/last-seen temporal rules. The API layer only validates transport shape and scalar parsing.
+
+The route depends on:
+
+```python
+handler: CreateResourceHandler = Depends(get_create_resource_handler)
+```
+
+It does not instantiate handlers directly, resolve `UnitOfWorkFactory`, import `SQLAlchemyUnitOfWork`, import repositories, open a Unit of Work, enter a transaction, retry, commit, roll back, or flush. `CreateResourceHandler` remains the sole transaction owner and performs the final commit under Block 03 semantics.
+
+The response schema is `ResourceCreatedResponse`, matching `ResourceCreatedResult` exactly:
+
+| Field | Type |
+| --- | --- |
+| `resource_id` | `UUID` |
+| `tenant_id` | `UUID` |
+| `canonical_name` | `str` |
+| `record_version` | `int` |
+
+Successful creation returns `201 Created` and the compact result only. The API does not return Resource Details, does not add `created_at`, `updated_at`, state, links, identifiers, metadata, or a read-after-write projection, and does not set a `Location` header in this stage.
+
+Example request:
+
+```json
+{
+  "resource_type_id": "0198a4a2-0000-7000-8000-000000000101",
+  "canonical_name": "app01.example.com",
+  "display_name": "Application 01",
+  "lifecycle_status_id": "0198a4a2-0000-7000-8000-000000000102",
+  "criticality_id": "0198a4a2-0000-7000-8000-000000000103",
+  "exposure_level_id": "0198a4a2-0000-7000-8000-000000000104",
+  "source_priority": 7,
+  "confidence_score": "0.8750",
+  "first_seen_at": "2026-08-19T12:00:00+00:00",
+  "last_seen_at": "2026-08-19T15:30:00+03:00"
+}
+```
+
+Example `201 Created` response:
+
+```json
+{
+  "resource_id": "0198a4a2-0000-7000-8000-000000000201",
+  "tenant_id": "0198a4a2-0000-7000-8000-000000000001",
+  "canonical_name": "app01.example.com",
+  "record_version": 1
+}
+```
+
+After `handler.handle(command)`, the route returns directly from `ResourceCreatedResult`. It does not call `GetResourceDetailsHandler`, `GetResourceByIdHandler`, `ResolveCanonicalResourceHandler`, `ResourceQueryService`, repositories, or a second Unit of Work. There is no read-after-write enrichment or canonical resolution.
+
+Application errors propagate to the centralized API error handler:
+
+| Application error | HTTP policy |
+| --- | --- |
+| `ValidationError` | `422 validation_error` |
+| `EntityNotFoundError` | `404 not_found` |
+| `ConflictError` | `409 conflict` |
+| `PersistenceError` | `503 service_unavailable` |
+
+The canonical-name uniqueness conflict originates in the application handler and surfaces through the centralized `409 conflict` mapping. The route does not perform preflight canonical-name lookup, tenant lookup, catalog checks, duplicate checks, or route-local `try/except ApplicationError` handling.
+
+The production Resource API operation inventory after Stage `04.3.1` is exactly:
+
+```text
+GET  /api/v1/tenants/{tenant_id}/resources
+POST /api/v1/tenants/{tenant_id}/resources
+GET  /api/v1/tenants/{tenant_id}/resources/{resource_id}
+GET  /api/v1/tenants/{tenant_id}/resources/{resource_id}/history
+GET  /api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships
+GET  /api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical
+GET  /api/v1/tenants/{tenant_id}/resource-lookups/canonical-name
+GET  /api/v1/tenants/{tenant_id}/resource-lookups/identifier
+GET  /api/v1/tenants/{tenant_id}/resource-lookups/alias
+```
+
 ## OpenAPI Policy
 
 OpenAPI tags, operation ids, status codes, examples, and schema metadata belong to API modules only. Application commands, queries, handlers, and results must remain unaware of OpenAPI. Stage `04.1.3` only verifies that common schemas can be included in generated OpenAPI components; operation metadata hardening remains deferred.
@@ -957,7 +1105,10 @@ Architecture tests enforce:
 - handler providers produce fresh instances and no global handler singletons are introduced;
 - `main.py` stays bootstrap-oriented;
 - the FastAPI app imports and keeps `/` and `/health` working;
-- the `/api/v1` production Resource route inventory contains only list, details, history, relationships, explicit canonical resolution, and three static Resource lookup `GET` routes;
+- the `/api/v1` production Resource operation inventory contains only list, create, details, history, relationships, explicit canonical resolution, and three static Resource lookup routes;
+- the Resource create route calls only `CreateResourceHandler`, constructs only `CreateResourceCommand`, returns `201 Created`, and maps only `ResourceCreatedResult`;
+- the Resource create request schema has no `tenant_id` body field and uses the path tenant as the only authoritative tenant source;
+- the Resource create route does not open transactions, call `commit()`, `rollback()`, or `flush()`, perform preflight reads, or read after write;
 - Resource details, history, relationships, and lookup routes do not import or call canonical resolution handlers, queries, or providers;
 - the Resource history route does not call Resource details handlers, queries, or providers;
 - the Resource relationships route does not call Resource details handlers, Resource history handlers, canonical resolution handlers, relationship write handlers, or graph traversal helpers;
@@ -969,4 +1120,4 @@ Architecture tests enforce:
 
 ## Deferred Work
 
-Stage `04.1` is complete and Stage `04.2` has list, details, history, relationships, identity lookup, and explicit canonical-resolution Resource read endpoints. The next planned step is `04.3.1 — Implement Resource Creation API`. Deferred work includes write endpoints, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
+Stage `04.1` is complete, Stage `04.2` has list, details, history, relationships, identity lookup, and explicit canonical-resolution Resource read endpoints, and Stage `04.3.1` has the first Resource command endpoint for creation. The next planned step is `04.3.2 — Implement Resource State Transition API`. Deferred work includes additional write endpoints, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.

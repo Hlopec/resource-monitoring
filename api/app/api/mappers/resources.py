@@ -2,6 +2,7 @@
 
 from app.api.schemas import (
     CanonicalResourceResolvedResponse,
+    ResourceCreatedResponse,
     ResourceAliasResponse,
     ResourceAliasLookupResponse,
     ResourceClassificationResponse,
@@ -26,6 +27,7 @@ from app.api.schemas import (
 )
 from app.application.results import (
     CanonicalResourceResolvedResult,
+    ResourceCreatedResult,
     ResourceAliasLookupResult,
     ResourceAliasResult,
     ResourceClassificationHistoryResult,
@@ -74,6 +76,17 @@ def resource_page_response(result: ResourcePageResult) -> ResourcePageResponse:
     return ResourcePageResponse(
         items=[resource_summary_response(item) for item in result.items],
         next_cursor=result.next_cursor,
+    )
+
+
+def resource_created_response(
+    result: ResourceCreatedResult,
+) -> ResourceCreatedResponse:
+    return ResourceCreatedResponse(
+        resource_id=result.resource_id,
+        tenant_id=result.tenant_id,
+        canonical_name=result.canonical_name,
+        record_version=result.record_version,
     )
 
 
