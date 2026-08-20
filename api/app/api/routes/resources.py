@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, status
 
 from app.api.composition import (
     get_assign_resource_identifier_handler,
+    get_assign_resource_ownership_handler,
     get_create_resource_handler,
     get_get_resource_details_handler,
     get_get_resource_history_handler,
@@ -17,6 +18,7 @@ from app.api.composition import (
 from app.api.mappers import (
     canonical_resource_resolved_response,
     resource_identifier_assigned_response,
+    resource_ownership_assigned_response,
     resource_created_response,
     resource_details_response,
     resource_history_response,
@@ -26,12 +28,14 @@ from app.api.mappers import (
 )
 from app.api.schemas import (
     AssignResourceIdentifierRequest,
+    AssignResourceOwnershipRequest,
     CanonicalResourceResolvedResponse,
     CreateResourceRequest,
     ResourceCreatedResponse,
     ResourceDetailsResponse,
     ResourceHistoryResponse,
     ResourceIdentifierAssignedResponse,
+    ResourceOwnershipAssignedResponse,
     ResourcePageResponse,
     ResourceRelationshipsResponse,
     ResourceStateTransitionedResponse,
@@ -39,11 +43,13 @@ from app.api.schemas import (
 )
 from app.application.commands import (
     AssignResourceIdentifierCommand,
+    AssignResourceOwnershipCommand,
     CreateResourceCommand,
     TransitionResourceStateCommand,
 )
 from app.application.handlers import (
     AssignResourceIdentifierHandler,
+    AssignResourceOwnershipHandler,
     CreateResourceHandler,
     GetResourceDetailsHandler,
     GetResourceHistoryHandler,
@@ -193,6 +199,33 @@ def assign_resource_identifier(
         valid_from=request.valid_from,
     )
     return resource_identifier_assigned_response(handler.handle(command))
+
+
+@router.post(
+    "/tenants/{tenant_id}/resources/{resource_id}/ownership",
+    response_model=ResourceOwnershipAssignedResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Assign tenant resource ownership",
+)
+def assign_resource_ownership(
+    tenant_id: UUID,
+    resource_id: UUID,
+    request: AssignResourceOwnershipRequest,
+    handler: AssignResourceOwnershipHandler = Depends(
+        get_assign_resource_ownership_handler
+    ),
+) -> ResourceOwnershipAssignedResponse:
+    command = AssignResourceOwnershipCommand(
+        tenant_id=tenant_id,
+        resource_id=resource_id,
+        organization_id=request.organization_id,
+        ownership_role_id=request.ownership_role_id,
+        is_primary=request.is_primary,
+        confidence_score=request.confidence_score,
+        valid_from=request.valid_from,
+        source=request.source,
+    )
+    return resource_ownership_assigned_response(handler.handle(command))
 
 
 @router.get(

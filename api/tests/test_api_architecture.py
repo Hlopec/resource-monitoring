@@ -21,6 +21,7 @@ from app.api.errors import (
 from app.api.router import api_v1_router
 from app.api.schemas import (
     AssignResourceIdentifierRequest,
+    AssignResourceOwnershipRequest,
     ApiError,
     ApiErrorDetail,
     ApiErrorResponse,
@@ -33,6 +34,7 @@ from app.api.schemas import (
     ResourceHistoryResponse,
     ResourceIdentifierAssignedResponse,
     ResourceIdentifierLookupResponse,
+    ResourceOwnershipAssignedResponse,
     ResourcePageResponse,
     ResourceRelationshipsResponse,
     ResourceStateTransitionedResponse,
@@ -271,6 +273,58 @@ FORBIDDEN_IDENTIFIER_TRANSFORM_CALL_NAMES = {
     "strip",
     "lower",
     "upper",
+}
+FORBIDDEN_OWNERSHIP_ROUTE_NAMES = {
+    "CreateResourceHandler",
+    "CreateResourceCommand",
+    "get_create_resource_handler",
+    "TransitionResourceStateHandler",
+    "TransitionResourceStateCommand",
+    "get_transition_resource_state_handler",
+    "AssignResourceIdentifierHandler",
+    "AssignResourceIdentifierCommand",
+    "get_assign_resource_identifier_handler",
+    "GetResourceByIdHandler",
+    "GetResourceByIdQuery",
+    "get_get_resource_by_id_handler",
+    "GetResourceDetailsHandler",
+    "GetResourceDetailsQuery",
+    "get_get_resource_details_handler",
+    "GetResourceHistoryHandler",
+    "GetResourceHistoryQuery",
+    "get_get_resource_history_handler",
+    "ResolveCanonicalResourceHandler",
+    "ResolveCanonicalResourceQuery",
+    "get_resolve_canonical_resource_handler",
+    "AssignResourceAliasHandler",
+    "AssignResourceAliasCommand",
+    "get_assign_resource_alias_handler",
+    "AssignResourceClassificationHandler",
+    "AssignResourceClassificationCommand",
+    "get_assign_resource_classification_handler",
+    "AssignResourceLabelHandler",
+    "AssignResourceLabelCommand",
+    "get_assign_resource_label_handler",
+    "AssignResourceRelationshipHandler",
+    "AssignResourceRelationshipCommand",
+    "get_assign_resource_relationship_handler",
+    "MergeResourceHandler",
+    "MergeResourceCommand",
+    "get_merge_resource_handler",
+    "ResourceQueryService",
+    "UnitOfWork",
+    "SQLAlchemyUnitOfWork",
+    "commit",
+    "rollback",
+    "flush",
+}
+FORBIDDEN_OWNERSHIP_LOOKUP_OR_INFERENCE_CALL_NAMES = {
+    "find_organization",
+    "get_organization",
+    "get_ownership_role",
+    "infer_primary",
+    "resolve_ownership_role",
+    "set_primary",
 }
 FORBIDDEN_CANONICAL_ROUTE_NAMES = {
     "GetResourceDetailsHandler",
@@ -666,6 +720,75 @@ def test_resource_identifier_assignment_route_is_explicit_handler_owned_transact
         "is_primary",
         "confidence_score",
         "valid_from",
+    ]
+    assert command_calls[0].args == []
+
+
+def test_resource_ownership_assignment_route_is_explicit_handler_owned_transaction() -> None:
+    resource_route_path = API_ROUTES_ROOT / "resources.py"
+    ownership_function = _function_def_for(
+        resource_route_path,
+        "assign_resource_ownership",
+    )
+    source = inspect.getsource(resource_routes.assign_resource_ownership)
+    call_names = _call_names_for(resource_routes.assign_resource_ownership)
+    signature = inspect.signature(resource_routes.assign_resource_ownership)
+    hints = get_type_hints(resource_routes.assign_resource_ownership)
+    handler_parameter = signature.parameters["handler"]
+
+    decorator = ownership_function.decorator_list[0]
+    assert isinstance(decorator, ast.Call)
+    assert isinstance(decorator.func, ast.Attribute)
+    assert decorator.func.attr == "post"
+    assert isinstance(decorator.args[0], ast.Constant)
+    assert decorator.args[0].value == (
+        "/tenants/{tenant_id}/resources/{resource_id}/ownership"
+    )
+    assert any(
+        keyword.arg == "response_model"
+        and isinstance(keyword.value, ast.Name)
+        and keyword.value.id == "ResourceOwnershipAssignedResponse"
+        for keyword in decorator.keywords
+    )
+    assert any(keyword.arg == "status_code" for keyword in decorator.keywords)
+    assert list(signature.parameters) == [
+        "tenant_id",
+        "resource_id",
+        "request",
+        "handler",
+    ]
+    assert hints["request"] is AssignResourceOwnershipRequest
+    assert hints["return"] is ResourceOwnershipAssignedResponse
+    assert isinstance(handler_parameter.default, Depends)
+    assert (
+        handler_parameter.default.dependency
+        is composition.get_assign_resource_ownership_handler
+    )
+    assert "AssignResourceOwnershipCommand" in call_names
+    assert "resource_ownership_assigned_response" in call_names
+    assert "handle" in call_names
+    assert "model_dump" not in source
+    assert "**" not in source
+    assert not any(name in source for name in FORBIDDEN_OWNERSHIP_ROUTE_NAMES)
+    assert FORBIDDEN_OWNERSHIP_LOOKUP_OR_INFERENCE_CALL_NAMES.isdisjoint(call_names)
+
+    command_calls = [
+        node
+        for node in ast.walk(ownership_function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "AssignResourceOwnershipCommand"
+    ]
+    assert len(command_calls) == 1
+    assert [keyword.arg for keyword in command_calls[0].keywords] == [
+        "tenant_id",
+        "resource_id",
+        "organization_id",
+        "ownership_role_id",
+        "is_primary",
+        "confidence_score",
+        "valid_from",
+        "source",
     ]
     assert command_calls[0].args == []
 
@@ -1081,6 +1204,10 @@ def test_api_v1_router_contains_only_expected_resource_operations() -> None:
             "POST",
             "/api/v1/tenants/{tenant_id}/resources/{resource_id}/identifiers",
         ),
+        (
+            "POST",
+            "/api/v1/tenants/{tenant_id}/resources/{resource_id}/ownership",
+        ),
     }
     assert "/api/v1/resources" not in route_paths
     assert [(sorted(route.methods), route.path) for route in resource_operations] == [
@@ -1100,6 +1227,10 @@ def test_api_v1_router_contains_only_expected_resource_operations() -> None:
         (
             ["POST"],
             "/api/v1/tenants/{tenant_id}/resources/{resource_id}/identifiers",
+        ),
+        (
+            ["POST"],
+            "/api/v1/tenants/{tenant_id}/resources/{resource_id}/ownership",
         ),
         (
             ["GET"],
@@ -1123,6 +1254,7 @@ def test_api_v1_router_contains_only_expected_resource_operations() -> None:
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/state-transitions",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/identifiers",
+        "/api/v1/tenants/{tenant_id}/resources/{resource_id}/ownership",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/history",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical",
@@ -1135,6 +1267,7 @@ def test_api_v1_router_contains_only_expected_resource_operations() -> None:
     assert resource_operations[5].response_model is ResourceDetailsResponse
     assert resource_operations[6].response_model is ResourceStateTransitionedResponse
     assert resource_operations[7].response_model is ResourceIdentifierAssignedResponse
-    assert resource_operations[8].response_model is ResourceHistoryResponse
-    assert resource_operations[9].response_model is ResourceRelationshipsResponse
-    assert resource_operations[10].response_model is CanonicalResourceResolvedResponse
+    assert resource_operations[8].response_model is ResourceOwnershipAssignedResponse
+    assert resource_operations[9].response_model is ResourceHistoryResponse
+    assert resource_operations[10].response_model is ResourceRelationshipsResponse
+    assert resource_operations[11].response_model is CanonicalResourceResolvedResponse

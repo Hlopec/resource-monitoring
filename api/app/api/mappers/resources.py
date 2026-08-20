@@ -13,6 +13,7 @@ from app.api.schemas import (
     ResourceIdentifierLookupResponse,
     ResourceLabelResponse,
     ResourceMergeResponse,
+    ResourceOwnershipAssignedResponse,
     ResourceOwnershipResponse,
     ResourcePageResponse,
     ResourceReadResponse,
@@ -43,6 +44,7 @@ from app.application.results import (
     ResourceLabelHistoryResult,
     ResourceLabelResult,
     ResourceMergeResult,
+    ResourceOwnershipAssignedResult,
     ResourceOwnershipHistoryResult,
     ResourceOwnershipResult,
     ResourcePageResult,
@@ -118,6 +120,20 @@ def resource_identifier_assigned_response(
         namespace=result.namespace,
         is_primary=result.is_primary,
         valid_from=result.valid_from,
+    )
+
+
+def resource_ownership_assigned_response(
+    result: ResourceOwnershipAssignedResult,
+) -> ResourceOwnershipAssignedResponse:
+    return ResourceOwnershipAssignedResponse(
+        resource_id=result.resource_id,
+        ownership_id=result.ownership_id,
+        organization_id=result.organization_id,
+        ownership_role_id=result.ownership_role_id,
+        is_primary=result.is_primary,
+        valid_from=result.valid_from,
+        source=result.source,
     )
 
 
