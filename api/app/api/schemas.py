@@ -135,6 +135,25 @@ class ResourceIdentifierAssignedResponse(ApiSchema):
     valid_from: AwareDatetime
 
 
+class AssignResourceOwnershipRequest(ApiSchema):
+    organization_id: UUID
+    ownership_role_id: UUID
+    is_primary: bool
+    confidence_score: ApiDecimal
+    valid_from: AwareDatetime
+    source: str | None = None
+
+
+class ResourceOwnershipAssignedResponse(ApiSchema):
+    resource_id: UUID
+    ownership_id: UUID
+    organization_id: UUID
+    ownership_role_id: UUID
+    is_primary: bool
+    valid_from: AwareDatetime
+    source: str | None
+
+
 class ResourceReadResponse(ApiSchema):
     id: UUID
     tenant_id: UUID
