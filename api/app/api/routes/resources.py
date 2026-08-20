@@ -11,6 +11,7 @@ from app.api.composition import (
     get_get_resource_relationships_handler,
     get_list_resources_handler,
     get_resolve_canonical_resource_handler,
+    get_transition_resource_state_handler,
 )
 from app.api.mappers import (
     canonical_resource_resolved_response,
@@ -19,6 +20,7 @@ from app.api.mappers import (
     resource_history_response,
     resource_page_response,
     resource_relationships_response,
+    resource_state_transitioned_response,
 )
 from app.api.schemas import (
     CanonicalResourceResolvedResponse,
@@ -28,8 +30,13 @@ from app.api.schemas import (
     ResourceHistoryResponse,
     ResourcePageResponse,
     ResourceRelationshipsResponse,
+    ResourceStateTransitionedResponse,
+    TransitionResourceStateRequest,
 )
-from app.application.commands import CreateResourceCommand
+from app.application.commands import (
+    CreateResourceCommand,
+    TransitionResourceStateCommand,
+)
 from app.application.handlers import (
     CreateResourceHandler,
     GetResourceDetailsHandler,
@@ -37,6 +44,7 @@ from app.application.handlers import (
     GetResourceRelationshipsHandler,
     ListResourcesHandler,
     ResolveCanonicalResourceHandler,
+    TransitionResourceStateHandler,
 )
 from app.application.queries import (
     DEFAULT_RESOURCE_PAGE_SIZE,
@@ -123,6 +131,33 @@ def get_resource_details(
         resource_id=resource_id,
     )
     return resource_details_response(handler.handle(query))
+
+
+@router.post(
+    "/tenants/{tenant_id}/resources/{resource_id}/state-transitions",
+    response_model=ResourceStateTransitionedResponse,
+    summary="Transition tenant resource state",
+)
+def transition_resource_state(
+    tenant_id: UUID,
+    resource_id: UUID,
+    request: TransitionResourceStateRequest,
+    handler: TransitionResourceStateHandler = Depends(
+        get_transition_resource_state_handler
+    ),
+) -> ResourceStateTransitionedResponse:
+    command = TransitionResourceStateCommand(
+        tenant_id=tenant_id,
+        resource_id=resource_id,
+        lifecycle_status_id=request.lifecycle_status_id,
+        criticality_id=request.criticality_id,
+        exposure_level_id=request.exposure_level_id,
+        source_priority=request.source_priority,
+        confidence_score=request.confidence_score,
+        transitioned_at=request.transitioned_at,
+        source=request.source,
+    )
+    return resource_state_transitioned_response(handler.handle(command))
 
 
 @router.get(
