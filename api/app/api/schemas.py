@@ -154,6 +154,25 @@ class ResourceOwnershipAssignedResponse(ApiSchema):
     source: str | None
 
 
+class AssignResourceClassificationRequest(ApiSchema):
+    classification_type_id: UUID
+    classification_value_id: UUID
+    is_primary: bool
+    confidence_score: ApiDecimal
+    valid_from: AwareDatetime
+    source: str | None = None
+
+
+class ResourceClassificationAssignedResponse(ApiSchema):
+    resource_id: UUID
+    classification_id: UUID
+    classification_type_id: UUID
+    classification_value_id: UUID
+    is_primary: bool
+    valid_from: AwareDatetime
+    source: str | None
+
+
 class ResourceReadResponse(ApiSchema):
     id: UUID
     tenant_id: UUID
