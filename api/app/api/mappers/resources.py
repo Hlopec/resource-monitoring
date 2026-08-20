@@ -5,6 +5,7 @@ from app.api.schemas import (
     ResourceCreatedResponse,
     ResourceAliasResponse,
     ResourceAliasLookupResponse,
+    ResourceClassificationAssignedResponse,
     ResourceClassificationResponse,
     ResourceDetailsResponse,
     ResourceHistoryResponse,
@@ -33,6 +34,7 @@ from app.application.results import (
     ResourceCreatedResult,
     ResourceAliasLookupResult,
     ResourceAliasResult,
+    ResourceClassificationAssignedResult,
     ResourceClassificationHistoryResult,
     ResourceClassificationResult,
     ResourceDetailsResult,
@@ -131,6 +133,20 @@ def resource_ownership_assigned_response(
         ownership_id=result.ownership_id,
         organization_id=result.organization_id,
         ownership_role_id=result.ownership_role_id,
+        is_primary=result.is_primary,
+        valid_from=result.valid_from,
+        source=result.source,
+    )
+
+
+def resource_classification_assigned_response(
+    result: ResourceClassificationAssignedResult,
+) -> ResourceClassificationAssignedResponse:
+    return ResourceClassificationAssignedResponse(
+        resource_id=result.resource_id,
+        classification_id=result.classification_id,
+        classification_type_id=result.classification_type_id,
+        classification_value_id=result.classification_value_id,
         is_primary=result.is_primary,
         valid_from=result.valid_from,
         source=result.source,

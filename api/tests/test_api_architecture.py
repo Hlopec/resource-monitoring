@@ -20,6 +20,7 @@ from app.api.errors import (
 )
 from app.api.router import api_v1_router
 from app.api.schemas import (
+    AssignResourceClassificationRequest,
     AssignResourceIdentifierRequest,
     AssignResourceOwnershipRequest,
     ApiError,
@@ -29,6 +30,7 @@ from app.api.schemas import (
     CanonicalResourceResolvedResponse,
     CreateResourceRequest,
     ResourceAliasLookupResponse,
+    ResourceClassificationAssignedResponse,
     ResourceCreatedResponse,
     ResourceDetailsResponse,
     ResourceHistoryResponse,
@@ -325,6 +327,60 @@ FORBIDDEN_OWNERSHIP_LOOKUP_OR_INFERENCE_CALL_NAMES = {
     "infer_primary",
     "resolve_ownership_role",
     "set_primary",
+}
+FORBIDDEN_CLASSIFICATION_ROUTE_NAMES = {
+    "CreateResourceHandler",
+    "CreateResourceCommand",
+    "get_create_resource_handler",
+    "TransitionResourceStateHandler",
+    "TransitionResourceStateCommand",
+    "get_transition_resource_state_handler",
+    "AssignResourceIdentifierHandler",
+    "AssignResourceIdentifierCommand",
+    "get_assign_resource_identifier_handler",
+    "AssignResourceOwnershipHandler",
+    "AssignResourceOwnershipCommand",
+    "get_assign_resource_ownership_handler",
+    "GetResourceByIdHandler",
+    "GetResourceByIdQuery",
+    "get_get_resource_by_id_handler",
+    "GetResourceDetailsHandler",
+    "GetResourceDetailsQuery",
+    "get_get_resource_details_handler",
+    "GetResourceHistoryHandler",
+    "GetResourceHistoryQuery",
+    "get_get_resource_history_handler",
+    "ResolveCanonicalResourceHandler",
+    "ResolveCanonicalResourceQuery",
+    "get_resolve_canonical_resource_handler",
+    "AssignResourceAliasHandler",
+    "AssignResourceAliasCommand",
+    "get_assign_resource_alias_handler",
+    "AssignResourceLabelHandler",
+    "AssignResourceLabelCommand",
+    "get_assign_resource_label_handler",
+    "AssignResourceRelationshipHandler",
+    "AssignResourceRelationshipCommand",
+    "get_assign_resource_relationship_handler",
+    "MergeResourceHandler",
+    "MergeResourceCommand",
+    "get_merge_resource_handler",
+    "ResourceQueryService",
+    "UnitOfWork",
+    "SQLAlchemyUnitOfWork",
+    "commit",
+    "rollback",
+    "flush",
+}
+FORBIDDEN_CLASSIFICATION_LOOKUP_OR_INFERENCE_CALL_NAMES = {
+    "find_classification_type",
+    "get_classification_type",
+    "find_classification_value",
+    "get_classification_value",
+    "infer_primary",
+    "resolve_classification",
+    "set_primary",
+    "translate_classification",
 }
 FORBIDDEN_CANONICAL_ROUTE_NAMES = {
     "GetResourceDetailsHandler",
@@ -793,6 +849,77 @@ def test_resource_ownership_assignment_route_is_explicit_handler_owned_transacti
     assert command_calls[0].args == []
 
 
+def test_resource_classification_assignment_route_is_explicit_handler_owned_transaction() -> None:
+    resource_route_path = API_ROUTES_ROOT / "resources.py"
+    classification_function = _function_def_for(
+        resource_route_path,
+        "assign_resource_classification",
+    )
+    source = inspect.getsource(resource_routes.assign_resource_classification)
+    call_names = _call_names_for(resource_routes.assign_resource_classification)
+    signature = inspect.signature(resource_routes.assign_resource_classification)
+    hints = get_type_hints(resource_routes.assign_resource_classification)
+    handler_parameter = signature.parameters["handler"]
+
+    decorator = classification_function.decorator_list[0]
+    assert isinstance(decorator, ast.Call)
+    assert isinstance(decorator.func, ast.Attribute)
+    assert decorator.func.attr == "post"
+    assert isinstance(decorator.args[0], ast.Constant)
+    assert decorator.args[0].value == (
+        "/tenants/{tenant_id}/resources/{resource_id}/classifications"
+    )
+    assert any(
+        keyword.arg == "response_model"
+        and isinstance(keyword.value, ast.Name)
+        and keyword.value.id == "ResourceClassificationAssignedResponse"
+        for keyword in decorator.keywords
+    )
+    assert any(keyword.arg == "status_code" for keyword in decorator.keywords)
+    assert list(signature.parameters) == [
+        "tenant_id",
+        "resource_id",
+        "request",
+        "handler",
+    ]
+    assert hints["request"] is AssignResourceClassificationRequest
+    assert hints["return"] is ResourceClassificationAssignedResponse
+    assert isinstance(handler_parameter.default, Depends)
+    assert (
+        handler_parameter.default.dependency
+        is composition.get_assign_resource_classification_handler
+    )
+    assert "AssignResourceClassificationCommand" in call_names
+    assert "resource_classification_assigned_response" in call_names
+    assert "handle" in call_names
+    assert "model_dump" not in source
+    assert "**" not in source
+    assert not any(name in source for name in FORBIDDEN_CLASSIFICATION_ROUTE_NAMES)
+    assert FORBIDDEN_CLASSIFICATION_LOOKUP_OR_INFERENCE_CALL_NAMES.isdisjoint(
+        call_names
+    )
+
+    command_calls = [
+        node
+        for node in ast.walk(classification_function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "AssignResourceClassificationCommand"
+    ]
+    assert len(command_calls) == 1
+    assert [keyword.arg for keyword in command_calls[0].keywords] == [
+        "tenant_id",
+        "resource_id",
+        "classification_type_id",
+        "classification_value_id",
+        "is_primary",
+        "confidence_score",
+        "valid_from",
+        "source",
+    ]
+    assert command_calls[0].args == []
+
+
 def test_resource_history_route_is_isolated_from_details_and_canonical_use_cases() -> None:
     resource_route_path = API_ROUTES_ROOT / "resources.py"
     history_function = _function_def_for(resource_route_path, "get_resource_history")
@@ -1208,6 +1335,10 @@ def test_api_v1_router_contains_only_expected_resource_operations() -> None:
             "POST",
             "/api/v1/tenants/{tenant_id}/resources/{resource_id}/ownership",
         ),
+        (
+            "POST",
+            "/api/v1/tenants/{tenant_id}/resources/{resource_id}/classifications",
+        ),
     }
     assert "/api/v1/resources" not in route_paths
     assert [(sorted(route.methods), route.path) for route in resource_operations] == [
@@ -1233,6 +1364,10 @@ def test_api_v1_router_contains_only_expected_resource_operations() -> None:
             "/api/v1/tenants/{tenant_id}/resources/{resource_id}/ownership",
         ),
         (
+            ["POST"],
+            "/api/v1/tenants/{tenant_id}/resources/{resource_id}/classifications",
+        ),
+        (
             ["GET"],
             "/api/v1/tenants/{tenant_id}/resources/{resource_id}/history",
         ),
@@ -1255,6 +1390,7 @@ def test_api_v1_router_contains_only_expected_resource_operations() -> None:
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/state-transitions",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/identifiers",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/ownership",
+        "/api/v1/tenants/{tenant_id}/resources/{resource_id}/classifications",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/history",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships",
         "/api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical",
@@ -1268,6 +1404,7 @@ def test_api_v1_router_contains_only_expected_resource_operations() -> None:
     assert resource_operations[6].response_model is ResourceStateTransitionedResponse
     assert resource_operations[7].response_model is ResourceIdentifierAssignedResponse
     assert resource_operations[8].response_model is ResourceOwnershipAssignedResponse
-    assert resource_operations[9].response_model is ResourceHistoryResponse
-    assert resource_operations[10].response_model is ResourceRelationshipsResponse
-    assert resource_operations[11].response_model is CanonicalResourceResolvedResponse
+    assert resource_operations[9].response_model is ResourceClassificationAssignedResponse
+    assert resource_operations[10].response_model is ResourceHistoryResponse
+    assert resource_operations[11].response_model is ResourceRelationshipsResponse
+    assert resource_operations[12].response_model is CanonicalResourceResolvedResponse

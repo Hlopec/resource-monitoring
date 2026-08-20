@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, status
 
 from app.api.composition import (
+    get_assign_resource_classification_handler,
     get_assign_resource_identifier_handler,
     get_assign_resource_ownership_handler,
     get_create_resource_handler,
@@ -17,6 +18,7 @@ from app.api.composition import (
 )
 from app.api.mappers import (
     canonical_resource_resolved_response,
+    resource_classification_assigned_response,
     resource_identifier_assigned_response,
     resource_ownership_assigned_response,
     resource_created_response,
@@ -27,11 +29,13 @@ from app.api.mappers import (
     resource_state_transitioned_response,
 )
 from app.api.schemas import (
+    AssignResourceClassificationRequest,
     AssignResourceIdentifierRequest,
     AssignResourceOwnershipRequest,
     CanonicalResourceResolvedResponse,
     CreateResourceRequest,
     ResourceCreatedResponse,
+    ResourceClassificationAssignedResponse,
     ResourceDetailsResponse,
     ResourceHistoryResponse,
     ResourceIdentifierAssignedResponse,
@@ -42,12 +46,14 @@ from app.api.schemas import (
     TransitionResourceStateRequest,
 )
 from app.application.commands import (
+    AssignResourceClassificationCommand,
     AssignResourceIdentifierCommand,
     AssignResourceOwnershipCommand,
     CreateResourceCommand,
     TransitionResourceStateCommand,
 )
 from app.application.handlers import (
+    AssignResourceClassificationHandler,
     AssignResourceIdentifierHandler,
     AssignResourceOwnershipHandler,
     CreateResourceHandler,
@@ -226,6 +232,33 @@ def assign_resource_ownership(
         source=request.source,
     )
     return resource_ownership_assigned_response(handler.handle(command))
+
+
+@router.post(
+    "/tenants/{tenant_id}/resources/{resource_id}/classifications",
+    response_model=ResourceClassificationAssignedResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Assign tenant resource classification",
+)
+def assign_resource_classification(
+    tenant_id: UUID,
+    resource_id: UUID,
+    request: AssignResourceClassificationRequest,
+    handler: AssignResourceClassificationHandler = Depends(
+        get_assign_resource_classification_handler
+    ),
+) -> ResourceClassificationAssignedResponse:
+    command = AssignResourceClassificationCommand(
+        tenant_id=tenant_id,
+        resource_id=resource_id,
+        classification_type_id=request.classification_type_id,
+        classification_value_id=request.classification_value_id,
+        is_primary=request.is_primary,
+        confidence_score=request.confidence_score,
+        valid_from=request.valid_from,
+        source=request.source,
+    )
+    return resource_classification_assigned_response(handler.handle(command))
 
 
 @router.get(
