@@ -166,6 +166,7 @@ Explicit mapping functions live in `app.api.mappers.resources`:
 - `resource_page_response(result: ResourcePageResult) -> ResourcePageResponse`
 - `resource_created_response(result: ResourceCreatedResult) -> ResourceCreatedResponse`
 - `resource_state_transitioned_response(result: ResourceStateTransitionedResult) -> ResourceStateTransitionedResponse`
+- `resource_identifier_assigned_response(result: ResourceIdentifierAssignedResult) -> ResourceIdentifierAssignedResponse`
 - `resource_read_response(result: ResourceReadResult) -> ResourceReadResponse`
 - `resource_state_response(result: ResourceStateResult) -> ResourceStateResponse`
 - `resource_identifier_response(result: ResourceIdentifierResult) -> ResourceIdentifierResponse`
@@ -1214,6 +1215,164 @@ GET  /api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships
 GET  /api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical
 ```
 
+Stage `04.3.3` adds exactly one additional Resource command endpoint:
+
+```http
+POST /api/v1/tenants/{tenant_id}/resources/{resource_id}/identifiers
+```
+
+This endpoint exposes the existing application identifier-assignment use case only:
+
+```text
+HTTP path + JSON body
+-> FastAPI / Pydantic transport parsing
+-> AssignResourceIdentifierCommand
+-> get_assign_resource_identifier_handler
+-> AssignResourceIdentifierHandler
+-> ResourceIdentifierAssignedResult
+-> resource_identifier_assigned_response(...)
+-> ResourceIdentifierAssignedResponse
+-> 201 Created
+```
+
+No ownership assignment, classification assignment, label assignment, alias assignment, relationship assignment, merge, identifier update, identifier delete, bulk assignment, primary identifier patch, generic normalization, hash derivation, fuzzy lookup, canonicalization, idempotency framework, post-assignment details fetch, post-assignment history fetch, or post-assignment identifier lookup is part of this stage.
+
+`AssignResourceIdentifierRequest` is API-owned and has exactly these body fields:
+
+| Field | Type |
+| --- | --- |
+| `identifier_type_id` | `UUID` |
+| `original_value` | `str` |
+| `normalized_value` | `str` |
+| `value_hash` | `str` |
+| `namespace` | `str | None` |
+| `is_primary` | `bool` |
+| `confidence_score` | `ApiDecimal` |
+| `valid_from` | `AwareDatetime` |
+
+`tenant_id` and `resource_id` are not request body fields. They come only from the path and are the only authoritative identifiers for the command.
+
+The route constructs the command explicitly field by field:
+
+```python
+AssignResourceIdentifierCommand(
+    tenant_id=tenant_id,
+    resource_id=resource_id,
+    identifier_type_id=request.identifier_type_id,
+    original_value=request.original_value,
+    normalized_value=request.normalized_value,
+    value_hash=request.value_hash,
+    namespace=request.namespace,
+    is_primary=request.is_primary,
+    confidence_score=request.confidence_score,
+    valid_from=request.valid_from,
+)
+```
+
+The route must not use `request.model_dump()`, `**kwargs`, reflection mapping, generic command factories, a command bus, mediator, handler registry, or service locator.
+
+Identifier inputs are already application-level identity data. The API does not trim, lowercase, uppercase, Unicode-normalize, canonicalize, derive `normalized_value`, recompute `value_hash`, validate a hash algorithm, infer `namespace`, perform fuzzy matching, or query for a matching identifier before assignment. `original_value`, `normalized_value`, `value_hash`, and `namespace` are passed unchanged into `AssignResourceIdentifierCommand`.
+
+`namespace` is optional. When omitted, the command receives `None`. When a client explicitly sends `""`, the route preserves the empty string and leaves any rejection to the application layer.
+
+`is_primary` is passed exactly as the accepted Pydantic boolean. The route does not derive primary state from existing identifiers.
+
+`confidence_score` follows the request-side Decimal convention established by Stages `04.3.1` and `04.3.2`: precision-sensitive clients should send decimal-compatible JSON string values, for example `"0.123456789123456789123456789"`. The route passes the accepted `Decimal` unchanged and does not convert through `float`, round, quantize, or normalize scale.
+
+`valid_from` uses the shared `AwareDatetime` transport policy. Aware UTC and aware non-UTC timestamps are accepted and passed unchanged into the command. Naive datetimes are rejected as transport validation errors. The route does not inject a timezone, convert to server local timezone, strip offsets, or normalize the timestamp.
+
+Application handlers remain authoritative for tenant existence, Resource existence, identifier type validity, normalized/hash consistency, uniqueness, primary identifier rules, confidence-score bounds, temporal invariants, conflict handling, concurrency handling, and persistence semantics. The API layer only validates HTTP shape and scalar parsing.
+
+The route depends on:
+
+```python
+handler: AssignResourceIdentifierHandler = Depends(
+    get_assign_resource_identifier_handler
+)
+```
+
+It does not instantiate handlers directly, resolve `UnitOfWorkFactory`, import `SQLAlchemyUnitOfWork`, import repositories, open a Unit of Work, start a transaction, lock rows, retry, commit, roll back, flush, query current identifiers, close current identifier rows, or check duplicates directly. `AssignResourceIdentifierHandler` remains the sole transaction owner.
+
+The response schema is `ResourceIdentifierAssignedResponse`, matching `ResourceIdentifierAssignedResult` exactly:
+
+| Field | Type |
+| --- | --- |
+| `resource_id` | `UUID` |
+| `identifier_id` | `UUID` |
+| `identifier_type_id` | `UUID` |
+| `original_value` | `str` |
+| `normalized_value` | `str` |
+| `value_hash` | `str` |
+| `namespace` | `str | None` |
+| `is_primary` | `bool` |
+| `valid_from` | `AwareDatetime` |
+
+Successful identifier assignment returns `201 Created` and the compact assignment result. The API does not add `tenant_id`, `confidence_score`, timestamps, Resource Details, links, collections, metadata, or a `Location` header in this stage.
+
+Example request:
+
+```json
+{
+  "identifier_type_id": "0198a4a2-0000-7000-8000-000000000302",
+  "original_value": " Example.COM ",
+  "normalized_value": "example.com",
+  "value_hash": "ABCDEF012345",
+  "namespace": "dns",
+  "is_primary": true,
+  "confidence_score": "0.8750",
+  "valid_from": "2026-08-20T10:30:00+00:00"
+}
+```
+
+Example `201 Created` response:
+
+```json
+{
+  "resource_id": "0198a4a2-0000-7000-8000-000000000201",
+  "identifier_id": "0198a4a2-0000-7000-8000-000000000301",
+  "identifier_type_id": "0198a4a2-0000-7000-8000-000000000302",
+  "original_value": " Example.COM ",
+  "normalized_value": "example.com",
+  "value_hash": "ABCDEF012345",
+  "namespace": "dns",
+  "is_primary": true,
+  "valid_from": "2026-08-20T10:30:00+00:00"
+}
+```
+
+After `handler.handle(command)`, the route returns directly from `ResourceIdentifierAssignedResult`. It does not call `FindResourceByIdentifierHandler`, `GetResourceDetailsHandler`, `GetResourceByIdHandler`, `GetResourceHistoryHandler`, `ResolveCanonicalResourceHandler`, `ResourceQueryService`, repositories, or a second Unit of Work. There is no read-after-write enrichment, identifier lookup, details projection, history fetch, or canonical resolution.
+
+Application errors propagate to the centralized API error handler:
+
+| Application error | HTTP policy |
+| --- | --- |
+| `ValidationError` | `422 validation_error` |
+| `EntityNotFoundError` | `404 not_found` |
+| `TenantBoundaryError` | `404 not_found` |
+| `ConflictError` | `409 conflict` |
+| `ConcurrentModificationError` | `409 concurrent_modification` |
+| `PersistenceError` | `503 service_unavailable` |
+
+`ConcurrentModificationError` remains distinct from generic conflict handling at the centralized error boundary. The route does not add ETag, `If-Match`, idempotency keys, retry headers, or local application-error translation.
+
+The production Resource API operation inventory after Stage `04.3.3` is exactly:
+
+```text
+GET  /api/v1/tenants/{tenant_id}/resource-lookups/canonical-name
+GET  /api/v1/tenants/{tenant_id}/resource-lookups/identifier
+GET  /api/v1/tenants/{tenant_id}/resource-lookups/alias
+GET  /api/v1/tenants/{tenant_id}/resources
+POST /api/v1/tenants/{tenant_id}/resources
+GET  /api/v1/tenants/{tenant_id}/resources/{resource_id}
+POST /api/v1/tenants/{tenant_id}/resources/{resource_id}/state-transitions
+POST /api/v1/tenants/{tenant_id}/resources/{resource_id}/identifiers
+GET  /api/v1/tenants/{tenant_id}/resources/{resource_id}/history
+GET  /api/v1/tenants/{tenant_id}/resources/{resource_id}/relationships
+GET  /api/v1/tenants/{tenant_id}/resources/{resource_id}/canonical
+```
+
+The inventory is `8 GET`, `3 POST`, and `11` total operations.
+
 ## OpenAPI Policy
 
 OpenAPI tags, operation ids, status codes, examples, and schema metadata belong to API modules only. Application commands, queries, handlers, and results must remain unaware of OpenAPI. Stage `04.1.3` only verifies that common schemas can be included in generated OpenAPI components; operation metadata hardening remains deferred.
@@ -1244,13 +1403,16 @@ Architecture tests enforce:
 - handler providers produce fresh instances and no global handler singletons are introduced;
 - `main.py` stays bootstrap-oriented;
 - the FastAPI app imports and keeps `/` and `/health` working;
-- the `/api/v1` production Resource operation inventory contains only list, create, state transition, details, history, relationships, explicit canonical resolution, and three static Resource lookup routes;
+- the `/api/v1` production Resource operation inventory contains only list, create, state transition, identifier assignment, details, history, relationships, explicit canonical resolution, and three static Resource lookup routes;
 - the Resource create route calls only `CreateResourceHandler`, constructs only `CreateResourceCommand`, returns `201 Created`, and maps only `ResourceCreatedResult`;
 - the Resource create request schema has no `tenant_id` body field and uses the path tenant as the only authoritative tenant source;
 - the Resource create route does not open transactions, call `commit()`, `rollback()`, or `flush()`, perform preflight reads, or read after write;
 - the Resource state-transition route calls only `TransitionResourceStateHandler`, constructs only `TransitionResourceStateCommand`, returns `200 OK`, and maps only `ResourceStateTransitionedResult`;
 - the Resource state-transition request schema has no `tenant_id` or `resource_id` body fields and uses path identifiers as the only authoritative identifiers;
 - the Resource state-transition route does not open transactions, call `commit()`, `rollback()`, or `flush()`, read current state directly, perform preflight reads, read after write, or invoke unrelated write handlers;
+- the Resource identifier-assignment route calls only `AssignResourceIdentifierHandler`, constructs only `AssignResourceIdentifierCommand`, returns `201 Created`, and maps only `ResourceIdentifierAssignedResult`;
+- the Resource identifier-assignment request schema has no `tenant_id` or `resource_id` body fields and uses path identifiers as the only authoritative identifiers;
+- the Resource identifier-assignment route does not open transactions, call `commit()`, `rollback()`, or `flush()`, query current identifiers, perform read-after-write enrichment, normalize, hash, derive identifier fields, or invoke unrelated write handlers;
 - Resource details, history, relationships, and lookup routes do not import or call canonical resolution handlers, queries, or providers;
 - the Resource history route does not call Resource details handlers, queries, or providers;
 - the Resource relationships route does not call Resource details handlers, Resource history handlers, canonical resolution handlers, relationship write handlers, or graph traversal helpers;
@@ -1262,4 +1424,4 @@ Architecture tests enforce:
 
 ## Deferred Work
 
-Stage `04.1` is complete, Stage `04.2` has list, details, history, relationships, identity lookup, and explicit canonical-resolution Resource read endpoints, and Stage `04.3` has Resource creation and state-transition command endpoints. The next planned step is `04.3.3 — Implement Resource Identifier Assignment API`. Deferred work includes additional write endpoints, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.
+Stage `04.1` is complete, Stage `04.2` has list, details, history, relationships, identity lookup, and explicit canonical-resolution Resource read endpoints, and Stage `04.3` has Resource creation, state-transition, and identifier-assignment command endpoints. The next planned step is `04.3.4 — Implement Resource Ownership Assignment API`. Deferred work includes additional write endpoints, full endpoint OpenAPI response metadata, request-validation envelope normalization if needed, authentication, authorization, rate limiting, caching, background jobs, event buses, collectors, findings, DefectDojo integrations, AI features, GraphQL, WebSockets, and async SQLAlchemy.

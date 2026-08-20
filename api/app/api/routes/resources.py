@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, status
 
 from app.api.composition import (
+    get_assign_resource_identifier_handler,
     get_create_resource_handler,
     get_get_resource_details_handler,
     get_get_resource_history_handler,
@@ -15,6 +16,7 @@ from app.api.composition import (
 )
 from app.api.mappers import (
     canonical_resource_resolved_response,
+    resource_identifier_assigned_response,
     resource_created_response,
     resource_details_response,
     resource_history_response,
@@ -23,21 +25,25 @@ from app.api.mappers import (
     resource_state_transitioned_response,
 )
 from app.api.schemas import (
+    AssignResourceIdentifierRequest,
     CanonicalResourceResolvedResponse,
     CreateResourceRequest,
     ResourceCreatedResponse,
     ResourceDetailsResponse,
     ResourceHistoryResponse,
+    ResourceIdentifierAssignedResponse,
     ResourcePageResponse,
     ResourceRelationshipsResponse,
     ResourceStateTransitionedResponse,
     TransitionResourceStateRequest,
 )
 from app.application.commands import (
+    AssignResourceIdentifierCommand,
     CreateResourceCommand,
     TransitionResourceStateCommand,
 )
 from app.application.handlers import (
+    AssignResourceIdentifierHandler,
     CreateResourceHandler,
     GetResourceDetailsHandler,
     GetResourceHistoryHandler,
@@ -158,6 +164,35 @@ def transition_resource_state(
         source=request.source,
     )
     return resource_state_transitioned_response(handler.handle(command))
+
+
+@router.post(
+    "/tenants/{tenant_id}/resources/{resource_id}/identifiers",
+    response_model=ResourceIdentifierAssignedResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Assign tenant resource identifier",
+)
+def assign_resource_identifier(
+    tenant_id: UUID,
+    resource_id: UUID,
+    request: AssignResourceIdentifierRequest,
+    handler: AssignResourceIdentifierHandler = Depends(
+        get_assign_resource_identifier_handler
+    ),
+) -> ResourceIdentifierAssignedResponse:
+    command = AssignResourceIdentifierCommand(
+        tenant_id=tenant_id,
+        resource_id=resource_id,
+        identifier_type_id=request.identifier_type_id,
+        original_value=request.original_value,
+        normalized_value=request.normalized_value,
+        value_hash=request.value_hash,
+        namespace=request.namespace,
+        is_primary=request.is_primary,
+        confidence_score=request.confidence_score,
+        valid_from=request.valid_from,
+    )
+    return resource_identifier_assigned_response(handler.handle(command))
 
 
 @router.get(
